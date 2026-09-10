@@ -101,6 +101,24 @@ mysql-data
 qsx@DESKTOP-SUFEJ61:~$ docker run -d --name mysql -p 3306:3306 -v mysql-data:/var/lib/mysql -e MYSQL_ROOT_PASSWORD=123456 mysql:8.4
 ```
 
+### 🚨 导入 SQL 必须指定 utf8mb4 字符集（防止中文乱码）
+建表/种子数据文件（如 `sql/init.sql`）是 **UTF-8 无 BOM**。若直接管道给 mysql 客户端而不指定连接字符集，UTF-8 字节会被误按 latin1 解释并双重编码，导致中文存成 mojibake（如「新增用户」变 `æ–°å¢žç”¨æˆ·`），且权限名、角色名、昵称、表/列 COMMENT 全受影响。
+
+**正确导入方式（二选一）：**
+
+方式一：`docker cp` 拷入容器再以 utf8mb4 导入（Windows PowerShell 推荐，绕开 shell 重新编码）
+```bash
+docker cp sql/init.sql mysql:/tmp/init.sql
+docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 < /tmp/init.sql"
+```
+
+方式二：客户端命令行直接加 `--default-character-set=utf8mb4`
+```bash
+mysql --default-character-set=utf8mb4 -uroot -p123456 < sql/init.sql
+```
+
+> 说明：init.sql 建表时已声明 `DEFAULT CHARSET=utf8mb4`，这里额外加 `--default-character-set` 是让**客户端连接/解析输入字节**也按 utf8mb4，两者结合才能保证中文正确落库。应用侧 JDBC 已用 `characterEncoding=utf8`，运行时读取无碍。
+
 # nacos3.2.3
 ```bath
 # 控制台访问端口
