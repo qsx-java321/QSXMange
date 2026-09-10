@@ -1,0 +1,43 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: qsx-manager
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/QSXManager?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: "123456"
+
+mybatis-plus:
+  # Mapper XML 位置
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.qsx.domain.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+      # 逻辑删除相关配置
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# JWT 自定义配置
+jwt:
+  # 密钥（HS256 要求至少 32 字节，正式环境务必替换并妥善保管）
+  secret: QSXManager-Secret-Key-For-JWT-HS256-Sign-and-Verify-2026
+  # 过期时间（毫秒），默认 24 小时
+  expiration: 86400000
+  # 请求头名称
+  header: Authorization
+  # Token 前缀
+  prefix: "Bearer "
+
+# 打印启动信息
+logging:
+  level:
+    com.qsx: debug

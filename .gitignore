@@ -1,0 +1,21 @@
+# Maven 构建输出
+target/
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# 日志
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 本地环境配置（避免泄露密钥）
+*.local.yml
