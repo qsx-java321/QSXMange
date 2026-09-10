@@ -27,7 +27,13 @@ public enum ResultCode {
     USER_ALREADY_EXISTS(1005, "用户已存在"),
     OLD_PASSWORD_ERROR(1006, "原密码错误"),
     NOT_FOUND(1007, "数据不存在"),
-    EMAIL_FORMAT_ERROR(1008, "邮箱格式不正确");
+    EMAIL_FORMAT_ERROR(1008, "邮箱格式不正确"),
+
+    // RBAC 角色/权限 (1009 起)
+    ROLE_NOT_FOUND(1009, "角色不存在"),
+    ROLE_CODE_EXISTS(1010, "角色编码已存在"),
+    ROLE_IN_USE(1011, "角色已被用户使用，无法删除"),
+    PERMISSION_NOT_FOUND(1012, "权限不存在");
 
     private final int code;
     private final String message;
