@@ -7,6 +7,8 @@ import com.qsx.web.dto.request.UserCreateRequest;
 import com.qsx.web.dto.request.UserUpdateRequest;
 import com.qsx.web.vo.UserVO;
 
+import java.util.List;
+
 /**
  * 用户管理服务
  */
@@ -36,6 +38,11 @@ public interface UserService {
      * 删除用户（逻辑删除，删除时释放邮箱）
      */
     void delete(Long id);
+
+    /**
+     * 为用户分配角色（整表替换）
+     */
+    void assignRoles(Long userId, List<Long> roleIds);
 
     /**
      * 按邮箱查询用户（未被逻辑删除）

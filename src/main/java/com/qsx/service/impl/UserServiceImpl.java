@@ -5,8 +5,12 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.PageResult;
 import com.qsx.common.result.ResultCode;
+import com.qsx.domain.entity.Role;
 import com.qsx.domain.entity.User;
+import com.qsx.domain.entity.UserRole;
+import com.qsx.mapper.RoleMapper;
 import com.qsx.mapper.UserMapper;
+import com.qsx.mapper.UserRoleMapper;
 import com.qsx.service.UserService;
 import com.qsx.web.dto.query.UserQuery;
 import com.qsx.web.dto.request.UserCreateRequest;
@@ -15,6 +19,10 @@ import com.qsx.web.vo.UserVO;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 用户管理服务实现
@@ -26,10 +34,17 @@ public class UserServiceImpl implements UserService {
 
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
+    private final UserRoleMapper userRoleMapper;
+    private final RoleMapper roleMapper;
 
-    public UserServiceImpl(UserMapper userMapper, PasswordEncoder passwordEncoder) {
+    public UserServiceImpl(UserMapper userMapper,
+                           PasswordEncoder passwordEncoder,
+                           UserRoleMapper userRoleMapper,
+                           RoleMapper roleMapper) {
         this.userMapper = userMapper;
         this.passwordEncoder = passwordEncoder;
+        this.userRoleMapper = userRoleMapper;
+        this.roleMapper = roleMapper;
     }
 
     @Override
@@ -108,6 +123,38 @@ public class UserServiceImpl implements UserService {
 
         // 逻辑删除（deleted -> 1）
         userMapper.deleteById(id);
+    }
+
+    @Override
+    public void assignRoles(Long userId, List<Long> roleIds) {
+        // 用户存在性校验
+        if (userMapper.selectById(userId) == null) {
+            throw new BusinessException(ResultCode.USER_NOT_FOUND);
+        }
+        // 校验目标角色均存在
+        if (roleIds != null) {
+            for (Long roleId : roleIds) {
+                if (roleMapper.selectById(roleId) == null) {
+                    throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
+                }
+            }
+        }
+        // 整表替换：先物理删旧，再批量插新
+        userRoleMapper.delete(new LambdaQueryWrapper<UserRole>().eq(UserRole::getUserId, userId));
+        if (roleIds != null && !roleIds.isEmpty()) {
+            LocalDateTime now = LocalDateTime.now();
+            List<UserRole> list = roleIds.stream()
+                    .distinct()
+                    .map(roleId -> {
+                        UserRole ur = new UserRole();
+                        ur.setUserId(userId);
+                        ur.setRoleId(roleId);
+                        ur.setCreateTime(now);
+                        return ur;
+                    })
+                    .collect(Collectors.toList());
+            userRoleMapper.insertBatch(list);
+        }
     }
 
     @Override
