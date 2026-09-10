@@ -62,9 +62,9 @@ class SecurityAccessTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("有效 token 访问用户接口返回200")
+    @DisplayName("有效 token 访问用户接口返回200（需 ADMIN 权限）")
     void valid_token_users_ok() throws Exception {
-        String token = registerAndLoginGetToken(uniqueEmail("valid"), "abc123");
+        String token = adminToken();
         mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(token)))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
     }

@@ -130,8 +130,7 @@ class AuthControllerTest extends BaseIntegrationTest {
     void login_disabledUser() throws Exception {
         // 通过用户管理接口新增一个禁用账号（status=1）
         String disabledEmail = uniqueEmail("disabled");
-        String adminEmail = uniqueEmail("admin-dis");
-        String adminToken = registerAndLoginGetToken(adminEmail, "abc123");
+        String adminToken = adminToken();
 
         // 新增禁用用户
         MvcResult addResult = mockMvc.perform(post("/api/users")

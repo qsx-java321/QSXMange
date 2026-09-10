@@ -18,10 +18,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 class UserControllerTest extends BaseIntegrationTest {
 
-    /** 获取管理员 token */
-    private String adminToken() throws Exception {
-        return registerAndLoginGetToken(uniqueEmail("admin"), "abc123");
-    }
+    // adminToken() 由 BaseIntegrationTest 提供：注册并绑定 ADMIN 超管角色
 
     private MvcResult createUser(String token, String email, String password, Integer status) throws Exception {
         String statusJson = status == null ? "" : ",\"status\":" + status;

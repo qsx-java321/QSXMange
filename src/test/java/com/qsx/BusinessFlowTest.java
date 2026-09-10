@@ -69,9 +69,9 @@ class BusinessFlowTest extends BaseIntegrationTest {
                 new LambdaQueryWrapper<User>().eq(User::getEmail, email)).getId();
 
         // 用管理员 token 删除用户 A（管理员本身是另一账号）
-        String adminToken = registerAndLoginGetToken(uniqueEmail("admin"), "abc123");
+        String admToken = adminToken();
         MvcResult del = mockMvc.perform(delete("/api/users/" + userId)
-                        .header("Authorization", bearerHeader(adminToken)))
+                        .header("Authorization", bearerHeader(admToken)))
                 .andExpect(status().isOk())
                 .andReturn();
         assertThat(objectMapper.readTree(del.getResponse().getContentAsString()).path("code").asInt()).isEqualTo(200);
@@ -101,9 +101,9 @@ class BusinessFlowTest extends BaseIntegrationTest {
     void disabled_login_rejected() throws Exception {
         // 管理员新增禁用用户
         String disabledEmail = uniqueEmail("blocked");
-        String adminToken = registerAndLoginGetToken(uniqueEmail("admin"), "abc123");
+        String admToken = adminToken();
         mockMvc.perform(post("/api/users")
-                        .header("Authorization", bearerHeader(adminToken))
+                        .header("Authorization", bearerHeader(admToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"" + disabledEmail + "\",\"password\":\"abc123\",\"status\":1}"))
                 .andExpect(status().isOk());
