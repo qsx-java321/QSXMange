@@ -9,6 +9,8 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 /**
  * 加载用户信息给 Spring Security 认证使用
  */
@@ -28,6 +30,9 @@ public class SecurityUserDetailsService implements UserDetailsService {
         if (user == null) {
             throw new UsernameNotFoundException("邮箱或密码错误");
         }
-        return new SecurityUser(user);
+        // 加载该用户的角色码与权限码（每请求查库，权限变更即时生效）
+        List<String> roleCodes = userMapper.selectRoleCodes(user.getId());
+        List<String> permissionCodes = userMapper.selectPermissionCodes(user.getId());
+        return new SecurityUser(user, roleCodes, permissionCodes);
     }
 }

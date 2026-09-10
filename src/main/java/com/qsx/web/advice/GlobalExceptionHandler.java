@@ -2,10 +2,14 @@ package com.qsx.web.advice;
 
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.Result;
+import com.qsx.common.result.ResultCode;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
@@ -31,6 +35,15 @@ public class GlobalExceptionHandler {
         FieldError fieldError = e.getBindingResult().getFieldError();
         String message = fieldError == null ? "参数校验失败" : fieldError.getDefaultMessage();
         return Result.fail(400, message);
+    }
+
+    /**
+     * 方法级鉴权拒绝（@PreAuthorize），返回 403
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public Result<Void> handleAccessDenied(AccessDeniedException e) {
+        return Result.fail(ResultCode.FORBIDDEN);
     }
 
     /**
