@@ -51,20 +51,27 @@ CREATE TABLE sys_role (
 
 -- --------------------------------------------------
 -- 权限表（权限码模型，code 即业务权限标识，如 user:add）
+-- 菜单（type=MENU）与按钮权限（type=PERMISSION）共用本表：
+--   菜单通过 parent_id 构成树；按钮权限作为叶子挂在所属菜单下
 -- --------------------------------------------------
 DROP TABLE IF EXISTS sys_permission;
 CREATE TABLE sys_permission (
     id          BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
-    code        VARCHAR(64) NOT NULL COMMENT '权限标识，如 user:add',
-    name        VARCHAR(50) NOT NULL COMMENT '权限名称',
-    type        VARCHAR(20) NOT NULL DEFAULT 'PERMISSION' COMMENT '类型：MENU/PERMISSION',
-    sort        INT         NOT NULL DEFAULT 0 COMMENT '排序',
+    code        VARCHAR(64) NOT NULL COMMENT '权限标识（菜单/按钮，如 system-user / user:add），需唯一',
+    name        VARCHAR(50) NOT NULL COMMENT '名称（菜单名或权限名）',
+    type        VARCHAR(20) NOT NULL DEFAULT 'PERMISSION' COMMENT '类型：MENU-菜单 / PERMISSION-按钮权限',
+    parent_id   BIGINT      NOT NULL DEFAULT 0 COMMENT '父ID：0-顶级；按钮权限指向所属菜单ID',
+    path        VARCHAR(200)         DEFAULT NULL COMMENT '菜单路由地址',
+    component   VARCHAR(200)         DEFAULT NULL COMMENT '前端组件路径',
+    icon        VARCHAR(50)          DEFAULT NULL COMMENT '菜单图标',
+    visible     TINYINT     NOT NULL DEFAULT 1 COMMENT '是否显示：1-显示，0-隐藏',
+    sort        INT         NOT NULL DEFAULT 0 COMMENT '排序（同级内升序）',
     create_time DATETIME             DEFAULT NULL COMMENT '创建时间',
     update_time DATETIME             DEFAULT NULL COMMENT '更新时间',
     deleted     TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除：0-正常，1-已删除',
     PRIMARY KEY (id),
     UNIQUE KEY uk_perm_code (code)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '系统权限表';
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '系统权限表（菜单+按钮权限）';
 
 -- --------------------------------------------------
 -- 用户-角色关联表（纯关系表，整表替换语义，物理删除，无逻辑删除字段）
@@ -98,36 +105,74 @@ CREATE TABLE sys_role_permission (
 -- 预置数据（幂等）
 -- 插入顺序：权限 → 角色 → 角色-权限 → 用户 → 用户-角色
 -- --------------------------------------------------
--- 1. 全量权限码（与 PermissionConstants 保持一致）
-INSERT IGNORE INTO sys_permission (code, name, type, sort, deleted) VALUES
-('user:page',       '用户分页',     'PERMISSION', 1, 0),
-('user:get',        '用户详情',     'PERMISSION', 2, 0),
-('user:create',     '新增用户',     'PERMISSION', 3, 0),
-('user:update',     '修改用户',     'PERMISSION', 4, 0),
-('user:delete',     '删除用户',     'PERMISSION', 5, 0),
-('user:assign-role','分配用户角色', 'PERMISSION', 6, 0),
-('role:page',       '角色分页',     'PERMISSION', 7, 0),
-('role:get',        '角色详情',     'PERMISSION', 8, 0),
-('role:create',     '新增角色',     'PERMISSION', 9, 0),
-('role:update',     '修改角色',     'PERMISSION', 10, 0),
-('role:delete',     '删除角色',     'PERMISSION', 11, 0),
-('role:assign',     '分配角色权限', 'PERMISSION', 12, 0),
-('perm:page',       '权限分页',     'PERMISSION', 13, 0),
-('perm:get',        '权限详情',     'PERMISSION', 14, 0);
+-- 1. 菜单（type=MENU）与按钮权限（type=PERMISSION）全量预置（与 PermissionConstants 保持一致）
+--    插入顺序：先菜单后按钮权限（按钮权限的 parent_id 稍后统一 UPDATE）
+INSERT IGNORE INTO sys_permission (code, name, type, parent_id, path, component, icon, visible, sort, deleted) VALUES
+('system',         '系统管理', 'MENU', 0, '/system', 'Layout',        'setting', 1, 1, 0),
+('system-user',    '用户管理', 'MENU', 0, 'user',    'system/user',   'user',    1, 1, 0),
+('system-role',    '角色管理', 'MENU', 0, 'role',    'system/role',   'peoples', 1, 2, 0),
+('system-perm',    '权限管理', 'MENU', 0, 'perm',    'system/perm',   'tree',    1, 3, 0),
+('system-menu',    '菜单管理', 'MENU', 0, 'menu',    'system/menu',   'menu',    1, 4, 0);
 
--- 2. 超级管理员角色
+INSERT IGNORE INTO sys_permission (code, name, type, parent_id, sort, deleted) VALUES
+('user:page',        '用户分页',     'PERMISSION', 0, 1, 0),
+('user:get',         '用户详情',     'PERMISSION', 0, 2, 0),
+('user:create',      '新增用户',     'PERMISSION', 0, 3, 0),
+('user:update',      '修改用户',     'PERMISSION', 0, 4, 0),
+('user:delete',      '删除用户',     'PERMISSION', 0, 5, 0),
+('user:assign-role', '分配用户角色', 'PERMISSION', 0, 6, 0),
+('role:page',        '角色分页',     'PERMISSION', 0, 7, 0),
+('role:get',         '角色详情',     'PERMISSION', 0, 8, 0),
+('role:create',      '新增角色',     'PERMISSION', 0, 9, 0),
+('role:update',      '修改角色',     'PERMISSION', 0, 10, 0),
+('role:delete',      '删除角色',     'PERMISSION', 0, 11, 0),
+('role:assign',      '分配角色权限', 'PERMISSION', 0, 12, 0),
+('perm:page',        '权限分页',     'PERMISSION', 0, 13, 0),
+('perm:get',         '权限详情',     'PERMISSION', 0, 14, 0),
+('menu:tree',        '菜单树',       'PERMISSION', 0, 15, 0),
+('menu:create',      '新增菜单',     'PERMISSION', 0, 16, 0),
+('menu:update',      '修改菜单',     'PERMISSION', 0, 17, 0),
+('menu:delete',      '删除菜单',     'PERMISSION', 0, 18, 0);
+
+-- 2. 挂载归属：子菜单挂到顶级菜单下，按钮权限挂到所属菜单下
+UPDATE sys_permission p
+JOIN sys_permission parent ON parent.code = 'system'
+SET p.parent_id = parent.id
+WHERE p.code IN ('system-user', 'system-role', 'system-perm', 'system-menu');
+
+UPDATE sys_permission p
+JOIN sys_permission parent ON parent.code = 'system-user'
+SET p.parent_id = parent.id
+WHERE p.code LIKE 'user:%';
+
+UPDATE sys_permission p
+JOIN sys_permission parent ON parent.code = 'system-role'
+SET p.parent_id = parent.id
+WHERE p.code LIKE 'role:%';
+
+UPDATE sys_permission p
+JOIN sys_permission parent ON parent.code = 'system-perm'
+SET p.parent_id = parent.id
+WHERE p.code LIKE 'perm:%';
+
+UPDATE sys_permission p
+JOIN sys_permission parent ON parent.code = 'system-menu'
+SET p.parent_id = parent.id
+WHERE p.code LIKE 'menu:%';
+
+-- 3. 超级管理员角色
 INSERT IGNORE INTO sys_role (code, name, description, status, deleted)
 VALUES ('ADMIN', '超级管理员', '系统内置超管，绑定全部权限', 0, 0);
 
--- 3. 超级管理员绑定全部权限
+-- 4. 超级管理员绑定全部权限
 INSERT IGNORE INTO sys_role_permission (role_id, permission_id)
 SELECT (SELECT id FROM sys_role WHERE code = 'ADMIN'), id FROM sys_permission;
 
--- 4. 超级管理员账号（默认密码 admin123，可用 BCryptPasswordEncoder 对目标密码重新生成 hash 后替换）
+-- 5. 超级管理员账号（默认密码 admin123，可用 BCryptPasswordEncoder 对目标密码重新生成 hash 后替换）
 INSERT IGNORE INTO sys_user (email, password, nickname, status, deleted)
 VALUES ('admin@qsx.com', '$2a$10$3KuSUz6n6SzyMXi535r3Su/qP6AaVWdCvjNUx0FWVFj4DS4tca3By', '超级管理员', 0, 0);
 
--- 5. 超级管理员绑定 ADMIN 角色
+-- 6. 超级管理员绑定 ADMIN 角色
 INSERT IGNORE INTO sys_user_role (user_id, role_id)
 SELECT (SELECT id FROM sys_user WHERE email = 'admin@qsx.com'),
        (SELECT id FROM sys_role WHERE code = 'ADMIN');

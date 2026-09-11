@@ -33,7 +33,13 @@ public enum ResultCode {
     ROLE_NOT_FOUND(1009, "角色不存在"),
     ROLE_CODE_EXISTS(1010, "角色编码已存在"),
     ROLE_IN_USE(1011, "角色已被用户使用，无法删除"),
-    PERMISSION_NOT_FOUND(1012, "权限不存在");
+    PERMISSION_NOT_FOUND(1012, "权限不存在"),
+
+    // 菜单管理 (1013 起)
+    MENU_NOT_FOUND(1013, "菜单不存在"),
+    MENU_HAS_CHILDREN(1014, "存在子菜单，无法删除"),
+    MENU_PARENT_INVALID(1015, "父菜单无效"),
+    PERMISSION_CODE_EXISTS(1016, "菜单或权限标识已存在");
 
     private final int code;
     private final String message;

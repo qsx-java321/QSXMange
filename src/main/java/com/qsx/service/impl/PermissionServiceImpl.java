@@ -2,30 +2,51 @@ package com.qsx.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.qsx.common.constant.PermissionConstants;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.PageResult;
 import com.qsx.common.result.ResultCode;
 import com.qsx.domain.entity.Permission;
+import com.qsx.domain.entity.RolePermission;
+import com.qsx.domain.entity.User;
 import com.qsx.mapper.PermissionMapper;
+import com.qsx.mapper.RolePermissionMapper;
+import com.qsx.mapper.UserMapper;
+import com.qsx.security.util.SecurityUtils;
 import com.qsx.service.PermissionService;
 import com.qsx.web.dto.query.PermissionQuery;
+import com.qsx.web.dto.request.MenuCreateRequest;
+import com.qsx.web.dto.request.MenuUpdateRequest;
 import com.qsx.web.vo.PermissionVO;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 权限管理服务实现（只读）
+ * 权限管理服务实现（菜单 + 按钮权限）
  */
 @Service
 public class PermissionServiceImpl implements PermissionService {
 
-    private final PermissionMapper permissionMapper;
+    /** 顶级菜单父ID */
+    private static final long ROOT_PARENT_ID = 0L;
 
-    public PermissionServiceImpl(PermissionMapper permissionMapper) {
+    private final PermissionMapper permissionMapper;
+    private final RolePermissionMapper rolePermissionMapper;
+    private final UserMapper userMapper;
+
+    public PermissionServiceImpl(PermissionMapper permissionMapper,
+                                 RolePermissionMapper rolePermissionMapper,
+                                 UserMapper userMapper) {
         this.permissionMapper = permissionMapper;
+        this.rolePermissionMapper = rolePermissionMapper;
+        this.userMapper = userMapper;
     }
 
     @Override
@@ -54,5 +75,184 @@ public class PermissionServiceImpl implements PermissionService {
         return permissionMapper.selectList(
                         new LambdaQueryWrapper<Permission>().orderByAsc(Permission::getSort))
                 .stream().map(PermissionVO::from).collect(Collectors.toList());
+    }
+
+    @Override
+    public List<PermissionVO> tree() {
+        return buildTree(selectAll());
+    }
+
+    @Override
+    public PermissionVO create(MenuCreateRequest request) {
+        // 标识唯一性校验（菜单/按钮共用 code 唯一索引）
+        if (selectByCode(request.getCode()) != null) {
+            throw new BusinessException(ResultCode.PERMISSION_CODE_EXISTS);
+        }
+
+        Long parentId = request.getParentId() == null ? ROOT_PARENT_ID : request.getParentId();
+        validateParent(parentId, null);
+
+        Permission permission = new Permission();
+        permission.setCode(request.getCode());
+        permission.setName(request.getName());
+        permission.setType(StringUtils.hasText(request.getType())
+                ? request.getType() : PermissionConstants.TYPE_MENU);
+        permission.setParentId(parentId);
+        permission.setPath(request.getPath());
+        permission.setComponent(request.getComponent());
+        permission.setIcon(request.getIcon());
+        permission.setVisible(request.getVisible() == null ? 1 : request.getVisible());
+        permission.setSort(request.getSort() == null ? 0 : request.getSort());
+        permissionMapper.insert(permission);
+        return PermissionVO.from(permission);
+    }
+
+    @Override
+    public PermissionVO update(Long id, MenuUpdateRequest request) {
+        Permission permission = getPermission(id);
+        // 标识唯一性校验（排除自身）
+        Permission existing = selectByCode(request.getCode());
+        if (existing != null && !existing.getId().equals(id)) {
+            throw new BusinessException(ResultCode.PERMISSION_CODE_EXISTS);
+        }
+        validateParent(request.getParentId(), id);
+
+        permission.setCode(request.getCode());
+        permission.setName(request.getName());
+        permission.setType(request.getType());
+        permission.setParentId(request.getParentId() == null ? ROOT_PARENT_ID : request.getParentId());
+        permission.setPath(request.getPath());
+        permission.setComponent(request.getComponent());
+        permission.setIcon(request.getIcon());
+        permission.setVisible(request.getVisible());
+        permission.setSort(request.getSort());
+        permissionMapper.updateById(permission);
+        return PermissionVO.from(permission);
+    }
+
+    @Override
+    public void delete(Long id) {
+        getPermission(id);
+        // 存在子节点禁止删除，防止孤立子树
+        Long childCount = permissionMapper.selectCount(
+                new LambdaQueryWrapper<Permission>().eq(Permission::getParentId, id));
+        if (childCount > 0) {
+            throw new BusinessException(ResultCode.MENU_HAS_CHILDREN);
+        }
+        // 清理角色-权限关联，再逻辑删除
+        rolePermissionMapper.delete(
+                new LambdaQueryWrapper<RolePermission>().eq(RolePermission::getPermissionId, id));
+        permissionMapper.deleteById(id);
+    }
+
+    @Override
+    public List<PermissionVO> getUserMenuTree() {
+        User current = SecurityUtils.getCurrentUser();
+        List<String> ownedCodes = userMapper.selectPermissionCodes(current.getId());
+        if (ownedCodes.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Set<String> owned = new HashSet<>(ownedCodes);
+
+        List<Permission> allMenus = permissionMapper.selectList(
+                new LambdaQueryWrapper<Permission>()
+                        .eq(Permission::getType, PermissionConstants.TYPE_MENU)
+                        .orderByAsc(Permission::getSort)
+                        .orderByAsc(Permission::getId));
+        if (allMenus.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // 保留：用户有权限的菜单 + 其全部祖先链（无直接权限也能看到父菜单入口）
+        Map<Long, Permission> byId = allMenus.stream()
+                .collect(Collectors.toMap(Permission::getId, p -> p));
+        Set<Long> keepIds = new HashSet<>();
+        for (Permission menu : allMenus) {
+            if (owned.contains(menu.getCode())) {
+                Long cur = menu.getId();
+                while (cur != null && cur != ROOT_PARENT_ID && keepIds.add(cur)) {
+                    Permission ancestor = byId.get(cur);
+                    if (ancestor == null) {
+                        break;
+                    }
+                    cur = ancestor.getParentId();
+                }
+            }
+        }
+        if (keepIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<Permission> kept = allMenus.stream()
+                .filter(menu -> keepIds.contains(menu.getId()))
+                .collect(Collectors.toList());
+        return buildTree(kept);
+    }
+
+    // ---------- 私有辅助 ----------
+
+    private List<Permission> selectAll() {
+        return permissionMapper.selectList(
+                new LambdaQueryWrapper<Permission>()
+                        .orderByAsc(Permission::getSort)
+                        .orderByAsc(Permission::getId));
+    }
+
+    /**
+     * 按 parentId 组装树（保持传入列表的排序）
+     */
+    private List<PermissionVO> buildTree(List<Permission> all) {
+        Map<Long, List<Permission>> byParent = all.stream()
+                .collect(Collectors.groupingBy(p -> p.getParentId() == null ? ROOT_PARENT_ID : p.getParentId()));
+        return buildChildren(ROOT_PARENT_ID, byParent);
+    }
+
+    private List<PermissionVO> buildChildren(Long parentId, Map<Long, List<Permission>> byParent) {
+        return byParent.getOrDefault(parentId, Collections.emptyList()).stream()
+                .map(p -> {
+                    PermissionVO vo = PermissionVO.from(p);
+                    vo.setChildren(buildChildren(p.getId(), byParent));
+                    return vo;
+                })
+                .collect(Collectors.toList());
+    }
+
+    private Permission getPermission(Long id) {
+        Permission permission = permissionMapper.selectById(id);
+        if (permission == null) {
+            throw new BusinessException(ResultCode.MENU_NOT_FOUND);
+        }
+        return permission;
+    }
+
+    private Permission selectByCode(String code) {
+        return permissionMapper.selectOne(new LambdaQueryWrapper<Permission>().eq(Permission::getCode, code));
+    }
+
+    /**
+     * 校验父节点：必须是已存在的菜单，且不能把节点挂到自身或其子孙下（防环）
+     */
+    private void validateParent(Long parentId, Long excludeId) {
+        if (parentId == null || parentId == ROOT_PARENT_ID) {
+            return;
+        }
+        Permission parent = permissionMapper.selectById(parentId);
+        if (parent == null || !PermissionConstants.TYPE_MENU.equals(parent.getType())) {
+            throw new BusinessException(ResultCode.MENU_PARENT_INVALID);
+        }
+        if (excludeId != null) {
+            Set<Long> visited = new HashSet<>();
+            Long cur = parentId;
+            while (cur != null && cur != ROOT_PARENT_ID) {
+                if (cur.equals(excludeId)) {
+                    throw new BusinessException(ResultCode.MENU_PARENT_INVALID);
+                }
+                if (!visited.add(cur)) {
+                    break; // 防御脏数据死循环
+                }
+                Permission ancestor = permissionMapper.selectById(cur);
+                cur = ancestor == null ? null : ancestor.getParentId();
+            }
+        }
     }
 }

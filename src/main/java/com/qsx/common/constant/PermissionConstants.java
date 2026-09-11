@@ -31,4 +31,15 @@ public final class PermissionConstants {
     // ---- 权限管理 ----
     public static final String PERM_PAGE = "perm:page";
     public static final String PERM_GET = "perm:get";
+
+    // ---- 菜单管理 ----
+    public static final String MENU_TREE = "menu:tree";
+    public static final String MENU_CREATE = "menu:create";
+    public static final String MENU_UPDATE = "menu:update";
+    public static final String MENU_DELETE = "menu:delete";
+
+    /** 菜单类型（对应 sys_permission.type） */
+    public static final String TYPE_MENU = "MENU";
+    /** 按钮权限类型（对应 sys_permission.type） */
+    public static final String TYPE_PERMISSION = "PERMISSION";
 }
