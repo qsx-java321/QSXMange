@@ -2,7 +2,7 @@
 
 > 单体单模块、前后端分离的中小型后台管理系统
 
-当前已实现「认证中心（邮箱+密码+JWT）」「RBAC 权限管理（角色/权限）」与「菜单管理（动态路由菜单树）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。Redis 缓存、邮箱验证码等将在后续阶段接入。
+当前已实现「认证中心（邮箱+密码+JWT）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」与「操作日志（AOP 访问审计）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。Redis 缓存、邮箱验证码等将在后续阶段接入。
 
 ---
 
@@ -14,6 +14,7 @@
 | 框架 | Spring Boot 3.5.16 |
 | 持久层 | MyBatis-Plus 3.5.17（含分页插件、逻辑删除） |
 | 安全框架 | Spring Security + JWT（jjwt 0.12.6，HS384）+ `@PreAuthorize` 方法级鉴权 |
+| 切面 | Spring AOP（`spring-boot-starter-aop`）操作日志切面 + `@Async` 异步落库 |
 | 数据库 | MySQL 8.x |
 | 密码加密 | BCrypt |
 | 接口风格 | RESTful，统一 `Result` / `PageResult` 返回 |
@@ -38,8 +39,11 @@ QSXManager
 │   │   │   │   ├── exception/               # BusinessException
 │   │   │   │   └── constant/                # SecurityConstants / PermissionConstants
 │   │   │   ├── config/                      # 全局配置
-│   │   │   │   ├── MybatisPlusConfig.java   # 分页插件 + 字段自动填充
-│   │   │   │   └── properties/JwtProperties.java  # JWT 配置属性
+    │   │   │   │   ├── MybatisPlusConfig.java   # 分页插件 + 字段自动填充
+    │   │   │   │   ├── AsyncConfig.java         # 异步线程池（操作日志落库）
+    │   │   │   │   └── properties/JwtProperties.java  # JWT 配置属性
+    │   │   │   ├── aspect/                      # AOP 切面
+    │   │   │   │   └── OperationLogAspect.java  # 操作日志：Controller 全量审计 + @Async 落库
 │   │   │   ├── security/                    # Spring Security + JWT 认证授权
 │   │   │   │   ├── config/SecurityConfig.java
 │   │   │   │   ├── filter/JwtAuthenticationFilter.java
@@ -61,7 +65,7 @@ QSXManager
 │   │   │       ├── advice/GlobalExceptionHandler.java
 │   │   │       ├── controller/
 │   │   │       │   ├── auth/AuthController.java
-│   │   │       │   └── admin/{user,role,perm,menu}/  # 用户/角色/权限/菜单管理控制器
+│   │   │       │   ├── admin/{user,role,perm,menu,log}/  # 用户/角色/权限/菜单/日志管理控制器
 │   │   │       ├── dto/{request,query}/
 │   │   │       └── vo/                      # 视图对象（不暴露密码）
 │   │   └── resources/
@@ -76,7 +80,7 @@ QSXManager
 ## 三、数据库
 
 - 数据库名：`QSXManager`
-- 共 5 张表（见 `sql/init.sql`）
+- 共 6 张表（见 `sql/init.sql`）
 
 | 表 | 说明 |
 |------|------|
@@ -85,10 +89,11 @@ QSXManager
 | `sys_permission` | 菜单+权限表，`code` 唯一索引；`type`(MENU-菜单/PERMISSION-按钮权限)，菜单经 `parent_id` 组成树 |
 | `sys_user_role` | 用户-角色关联表，纯关系表、物理删除、整表替换语义 |
 | `sys_role_permission` | 角色-权限关联表，纯关系表、物理删除、整表替换语义 |
+| `sys_operation_log` | 操作日志表，审计数据不可变（无 deleted/update_time），异步落库 |
 
 ### 预置数据（幂等，`INSERT IGNORE`）
-- 5 个菜单（`system` 系统管理 → 用户/角色/权限/菜单管理）
-- 18 个按钮权限码（`user:*` / `role:*` / `perm:*` / `menu:*`，与 `PermissionConstants` 一一对应，归属挂载到对应菜单下）
+- 6 个菜单（`system` 系统管理 → 用户/角色/权限/菜单/日志管理）
+- 20 个按钮权限码（`user:*` / `role:*` / `perm:*` / `menu:*` / `log:*`，与 `PermissionConstants` 一一对应，归属挂载到对应菜单下）
 - `ADMIN` 超级管理员角色，绑定全部菜单与权限
 - 超管账号 `admin@qsx.com / admin123`
 
@@ -151,6 +156,16 @@ QSXManager
 | 新增菜单 | `POST /api/menus` | `menu:create` | 支持菜单/按钮权限，标识唯一性校验 |
 | 修改菜单 | `PUT /api/menus/{id}` | `menu:update` | 含防环校验（父节点不能指向自身或子孙） |
 | 删除菜单 | `DELETE /api/menus/{id}` | `menu:delete` | 存在子节点禁止删除；删除时清理角色-权限关联 |
+
+### 操作日志（需登录 + 权限）
+
+操作日志通过 **Spring AOP 切面**全量拦截 `/api/*` 业务调用（`com.qsx.web.controller` 包扫描，`@Around` + `@Async` 异步落库），并补记 Security 层未登录(401)；越权(403) 由切面捕获。判定以业务语义（`Result.code==200`）为准，另通过 `log.info` 打印到日志文件。日志表为审计数据、不可变。
+
+| 功能 | 接口 | 权限码 | 说明 |
+|------|------|------|------|
+| 分页查询 | `GET /api/logs` | `log:page` | 支持 username / url / success / method / 时间段筛选 |
+| 删除日志 | `DELETE /api/logs/{id}` | `log:delete` | 物理删除单条 |
+| 清空日志 | `DELETE /api/logs` | `log:delete` | 物理清空全部 |
 
 ### 鉴权说明
 - `/auth/register`、`/auth/login` 匿名放行；
@@ -236,7 +251,7 @@ mvn clean test
 
 - [ ] Redis 缓存（Token 黑名单、权限缓存）
 - [ ] 邮箱验证码注册
-- [ ] 登录日志、操作日志
+- [ ] 登录日志（操作日志已实现）
 - [ ] 前端管理界面（对接菜单树动态路由）
 
 ---
