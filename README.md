@@ -1,8 +1,8 @@
 # QSXManager 后台管理系统
 
-> 单体单模块、前后端分离的中小型后台管理系统（基础版）
+> 单体单模块、前后端分离的中小型后台管理系统
 
-当前为「基础版」，已实现认证中心（邮箱+密码+JWT）与用户管理（增删改查）的核心闭环。RBAC 角色/权限管理、Redis 缓存等将在后续阶段接入。
+当前已实现「认证中心（邮箱+密码+JWT）」「RBAC 权限管理（角色/权限）」与「菜单管理（动态路由菜单树）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。Redis 缓存、邮箱验证码等将在后续阶段接入。
 
 ---
 
@@ -12,13 +12,13 @@
 |------|------|
 | 语言 | Java 21 |
 | 框架 | Spring Boot 3.5.16 |
-| 持久层 | MyBatis-Plus 3.5.17（含分页插件） |
-| 安全框架 | Spring Security + JWT（jjwt 0.12.6，HS384） |
+| 持久层 | MyBatis-Plus 3.5.17（含分页插件、逻辑删除） |
+| 安全框架 | Spring Security + JWT（jjwt 0.12.6，HS384）+ `@PreAuthorize` 方法级鉴权 |
 | 数据库 | MySQL 8.x |
 | 密码加密 | BCrypt |
 | 接口风格 | RESTful，统一 `Result` / `PageResult` 返回 |
 
-> 说明：基础版采用**纯 JWT 无状态认证**，暂未引入 Redis（登出依靠客户端清除 Token）。
+> 说明：采用**纯 JWT 无状态认证**，暂未引入 Redis（登出依靠客户端清除 Token，角色/权限每请求实时查库，变更即时生效）。
 
 ## 二、项目结构
 
@@ -28,8 +28,7 @@
 QSXManager
 ├── pom.xml                          # Maven 依赖与构建配置
 ├── sql/
-│   └── init.sql                     # 建表脚本（sys_user）
-├── script/                          # （如存在）辅助脚本
+│   └── init.sql                     # 建表脚本（sys_user + RBAC 四表 + 菜单/权限 + 预置数据）
 ├── src/
 │   ├── main/
 │   │   ├── java/com/qsx/
@@ -37,7 +36,7 @@ QSXManager
 │   │   │   ├── common/                      # 通用基础能力
 │   │   │   │   ├── result/                  # Result / PageResult / ResultCode
 │   │   │   │   ├── exception/               # BusinessException
-│   │   │   │   └── constant/                # SecurityConstants
+│   │   │   │   └── constant/                # SecurityConstants / PermissionConstants
 │   │   │   ├── config/                      # 全局配置
 │   │   │   │   ├── MybatisPlusConfig.java   # 分页插件 + 字段自动填充
 │   │   │   │   └── properties/JwtProperties.java  # JWT 配置属性
@@ -45,22 +44,24 @@ QSXManager
 │   │   │   │   ├── config/SecurityConfig.java
 │   │   │   │   ├── filter/JwtAuthenticationFilter.java
 │   │   │   │   ├── handler/                 # 401 / 403 JSON 处理
-│   │   │   │   ├── model/SecurityUser.java
+│   │   │   │   ├── model/SecurityUser.java  # 封装角色码(ROLE_前缀) + 权限码
 │   │   │   │   ├── token/JwtTokenProvider.java
 │   │   │   │   ├── service/SecurityUserDetailsService.java
 │   │   │   │   └── util/SecurityUtils.java
 │   │   │   ├── domain/                      # 领域模型
-│   │   │   │   ├── entity/User.java
+│   │   │   │   ├── entity/                  # User / Role / Permission / UserRole / RolePermission
 │   │   │   │   └── base/BaseEntity.java     # 通用字段（含逻辑删除）
-│   │   │   ├── mapper/UserMapper.java       # MyBatis-Plus Mapper
+│   │   │   ├── mapper/                      # MyBatis-Plus Mapper（含角色/权限联表查询）
 │   │   │   ├── service/                     # 业务接口 + impl
-│   │   │   │   ├── AuthService.java
-│   │   │   │   └── UserService.java
+│   │   │   │   ├── AuthService.java         # 认证中心
+│   │   │   │   ├── UserService.java         # 用户管理（含分配角色）
+│   │   │   │   ├── RoleService.java         # 角色管理（含分配权限）
+│   │   │   │   └── PermissionService.java   # 菜单+权限管理（含树形）
 │   │   │   └── web/                         # Web 接入层
 │   │   │       ├── advice/GlobalExceptionHandler.java
 │   │   │       ├── controller/
 │   │   │       │   ├── auth/AuthController.java
-│   │   │       │   └── admin/user/UserController.java
+│   │   │       │   └── admin/{user,role,perm,menu}/  # 用户/角色/权限/菜单管理控制器
 │   │   │       ├── dto/{request,query}/
 │   │   │       └── vo/                      # 视图对象（不暴露密码）
 │   │   └── resources/
@@ -75,20 +76,25 @@ QSXManager
 ## 三、数据库
 
 - 数据库名：`QSXManager`
-- 核心表：`sys_user`
+- 共 5 张表（见 `sql/init.sql`）
 
-`sys_user` 结构要点：
-- `email` 唯一索引，作为登录账号
-- `password` 存 BCrypt 加密结果
-- `status`：0-正常、1-禁用
-- `deleted`：逻辑删除标记（0-正常、1-已删除）
+| 表 | 说明 |
+|------|------|
+| `sys_user` | 用户表，`email` 唯一索引，`status`(0-正常/1-禁用)，`deleted` 逻辑删除 |
+| `sys_role` | 角色表，`code` 唯一索引，如 `ADMIN`，`deleted` 逻辑删除 |
+| `sys_permission` | 菜单+权限表，`code` 唯一索引；`type`(MENU-菜单/PERMISSION-按钮权限)，菜单经 `parent_id` 组成树 |
+| `sys_user_role` | 用户-角色关联表，纯关系表、物理删除、整表替换语义 |
+| `sys_role_permission` | 角色-权限关联表，纯关系表、物理删除、整表替换语义 |
 
-> 建表脚本见 `sql/init.sql`。
+### 预置数据（幂等，`INSERT IGNORE`）
+- 5 个菜单（`system` 系统管理 → 用户/角色/权限/菜单管理）
+- 18 个按钮权限码（`user:*` / `role:*` / `perm:*` / `menu:*`，与 `PermissionConstants` 一一对应，归属挂载到对应菜单下）
+- `ADMIN` 超级管理员角色，绑定全部菜单与权限
+- 超管账号 `admin@qsx.com / admin123`
 
-### 关键特性：逻辑删除释放邮箱
-用户被逻辑删除时，系统先把原 `email` 拼上 `#deleted_<时间戳>` 后缀，再置 `deleted=1`。这样：
-- 原邮箱从唯一索引中腾出，**同一邮箱可正常重新注册使用**；
-- 已删除用户的记录仍保留在库中可追溯。
+### 关键特性
+- **逻辑删除释放邮箱**：用户被逻辑删除时，系统先把原 `email` 拼上 `#deleted_<时间戳>` 后缀，再置 `deleted=1`。原邮箱从唯一索引中腾出，**同一邮箱可正常重新注册使用**，已删除记录仍可追溯。
+- **整表替换授权**：分配角色/权限均先物理删旧关联、再批量插新。
 
 ## 四、业务功能
 
@@ -97,23 +103,59 @@ QSXManager
 | 功能 | 接口 | 说明 |
 |------|------|------|
 | 注册 | `POST /auth/register` | 邮箱+密码注册，默认启用 |
-| 登录 | `POST /auth/login` | 校验通过返回 JWT 与用户信息 |
+| 登录 | `POST /auth/login` | 校验通过返回 JWT 与用户信息（含角色码、权限码） |
 | 当前用户 | `GET /auth/me` | 返回当前登录用户信息 |
 | 修改密码 | `POST /auth/change-password` | 需校验原密码 |
 
-### 用户管理（需登录）
+### 用户管理（需登录 + 权限）
 
-| 功能 | 接口 | 说明 |
-|------|------|------|
-| 分页查询 | `GET /api/users` | 支持 email / nickname / status 筛选 |
-| 新增用户 | `POST /api/users` | 需唯一邮箱 |
-| 修改用户 | `PUT /api/users/{id}` | 支持改名、改状态、改邮箱（唯一性校验） |
-| 用户详情 | `GET /api/users/{id}` | |
-| 删除用户 | `DELETE /api/users/{id}` | 逻辑删除并释放邮箱 |
+| 功能 | 接口 | 权限码 | 说明 |
+|------|------|------|------|
+| 分页查询 | `GET /api/users` | `user:page` | 支持 email / nickname / status 筛选 |
+| 用户详情 | `GET /api/users/{id}` | `user:get` | |
+| 新增用户 | `POST /api/users` | `user:create` | 需唯一邮箱 |
+| 修改用户 | `PUT /api/users/{id}` | `user:update` | 支持改名、改状态、改邮箱（唯一性校验） |
+| 删除用户 | `DELETE /api/users/{id}` | `user:delete` | 逻辑删除并释放邮箱 |
+| 分配角色 | `PUT /api/users/{id}/roles` | `user:assign-role` | 整表替换用户角色 |
+
+### 角色管理（需登录 + 权限）
+
+| 功能 | 接口 | 权限码 | 说明 |
+|------|------|------|------|
+| 分页查询 | `GET /api/roles` | `role:page` | 支持 code / name / status 筛选 |
+| 角色列表 | `GET /api/roles/all` | `role:page` | 仅启用角色，用于下拉选择 |
+| 角色详情 | `GET /api/roles/{id}` | `role:get` | 含已绑定权限 ID 列表 |
+| 新增角色 | `POST /api/roles` | `role:create` | 编码唯一性校验 |
+| 修改角色 | `PUT /api/roles/{id}` | `role:update` | 编码唯一性校验（排除自身） |
+| 删除角色 | `DELETE /api/roles/{id}` | `role:delete` | 内置 `ADMIN` 禁止删除；先清关联再逻辑删除 |
+| 分配权限 | `PUT /api/roles/{id}/permissions` | `role:assign` | 整表替换角色权限 |
+
+### 权限管理（需登录 + 权限，只读）
+
+| 功能 | 接口 | 权限码 | 说明 |
+|------|------|------|------|
+| 分页查询 | `GET /api/permissions` | `perm:page` | 支持 code / name 筛选 |
+| 权限列表 | `GET /api/permissions/all` | `perm:page` | 按 sort 排序，用于分配权限 |
+| 权限详情 | `GET /api/permissions/{id}` | `perm:get` | |
+
+> 权限码维护走 `sql/init.sql`（增删权限后需同步 `PermissionConstants` 并为 ADMIN 补绑），分页查询为只读接口。
+
+### 菜单管理（需登录 + 权限）
+
+菜单与按钮权限共用 `sys_permission` 表：`type=MENU` 组成树（`parent_id` 自关联），`type=PERMISSION` 作为叶子挂在菜单下。
+
+| 功能 | 接口 | 权限码 | 说明 |
+|------|------|------|------|
+| 菜单树 | `GET /api/menus/tree` | `menu:tree` | 全量菜单+按钮权限树（管理端） |
+| 我的菜单 | `GET /api/menus/current` | 登录即可 | 当前用户菜单树（按权限过滤+补祖先，供前端动态路由） |
+| 新增菜单 | `POST /api/menus` | `menu:create` | 支持菜单/按钮权限，标识唯一性校验 |
+| 修改菜单 | `PUT /api/menus/{id}` | `menu:update` | 含防环校验（父节点不能指向自身或子孙） |
+| 删除菜单 | `DELETE /api/menus/{id}` | `menu:delete` | 存在子节点禁止删除；删除时清理角色-权限关联 |
 
 ### 鉴权说明
 - `/auth/register`、`/auth/login` 匿名放行；
 - 其余接口需携带请求头 `Authorization: Bearer <token>`；
+- URL 级 `authenticated()` + 方法级 `@PreAuthorize` 权限码校验（双保险），权限码随请求实时从数据库加载；
 - 未登录返回 401，无权限返回 403，参数校验失败返回 400，均统一为 JSON 格式。
 
 ## 五、统一返回格式
@@ -137,6 +179,14 @@ QSXManager
 | 1003 | 账号已被禁用 |
 | 1004 | 用户不存在 |
 | 1006 | 原密码错误 |
+| 1009 | 角色不存在 |
+| 1010 | 角色编码已存在 |
+| 1011 | 角色已被用户使用，无法删除 |
+| 1012 | 权限不存在 |
+| 1013 | 菜单不存在 |
+| 1014 | 存在子菜单，无法删除 |
+| 1015 | 父菜单无效 |
+| 1016 | 菜单或权限标识已存在 |
 
 ## 六、快速开始
 
@@ -146,7 +196,7 @@ QSXManager
 - MySQL 8.x
 
 ### 1. 准备数据库
-创建数据库并执行建表脚本：
+创建数据库并执行建表脚本（含 RBAC 四表与预置数据）：
 
 ```sql
 CREATE DATABASE QSXManager CHARACTER SET utf8mb4;
@@ -155,7 +205,7 @@ SOURCE sql/init.sql;
 ```
 
 ### 2. 配置数据源
-编辑 `src/main/resources/application.yml`，设置 `spring.datasource` 与 `jwt.secret`。
+编辑 `src/main/resources/application.yml`，设置 `spring.datasource` 与 `jwt.secret`（正式环境务必替换 JWT 密钥）。
 
 ### 3. 启动
 
@@ -165,21 +215,29 @@ mvn spring-boot:run
 
 应用默认端口 `8080`。
 
-### 4. 运行自动化测试（可选）
+### 4. 登录体验
+使用预置超管账号登录，即可调用全部管理接口：
+
+```bash
+curl -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@qsx.com","password":"admin123"}'
+```
+
+### 5. 运行自动化测试（可选）
 
 ```bash
 mvn clean test
 ```
 
-测试复用本地 MySQL 的 QSXManager 库，执行前需保证库可连接和 `sys_user` 表存在。
+测试复用本地 MySQL 的 QSXManager 库，执行前需保证库可连接和表结构存在。
 
 ## 七、后续规划
 
-- [ ] RBAC 角色 / 权限 / 菜单管理
-- [ ] 接口级与方法级鉴权（`@PreAuthorize`）
 - [ ] Redis 缓存（Token 黑名单、权限缓存）
 - [ ] 邮箱验证码注册
 - [ ] 登录日志、操作日志
+- [ ] 前端管理界面（对接菜单树动态路由）
 
 ---
 
