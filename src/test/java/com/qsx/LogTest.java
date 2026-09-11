@@ -1,0 +1,174 @@
+package com.qsx;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.qsx.domain.entity.OperationLog;
+import com.qsx.mapper.OperationLogMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+import java.util.List;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * 操作日志测试：成功/业务失败/未登录401/越权403 记录，分页查询，删除与清空。
+ *
+ * 说明：日志为异步落库，等待逻辑基于“匹配条件的日志出现”而非计数，
+ * 以规避全量测试下其他用例迟到异步日志的干扰。
+ */
+class LogTest extends BaseIntegrationTest {
+
+    @Autowired
+    private OperationLogMapper operationLogMapper;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @BeforeEach
+    void cleanLogs() {
+        jdbcTemplate.update("DELETE FROM sys_operation_log");
+    }
+
+    private long logCount() {
+        Long c = operationLogMapper.selectCount(null);
+        return c == null ? 0 : c;
+    }
+
+    /** 拉取全部日志（按 id 倒序） */
+    private List<OperationLog> allLogs() {
+        return operationLogMapper.selectList(
+                        new LambdaQueryWrapper<OperationLog>().orderByDesc(OperationLog::getId))
+                .stream().collect(Collectors.toList());
+    }
+
+    /** 轮询等待：在超时内出现首条满足条件的日志并返回，否则抛错 */
+    private OperationLog awaitAnyMatch(Predicate<OperationLog> predicate) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 8000;
+        while (System.currentTimeMillis() < deadline) {
+            List<OperationLog> logs = allLogs();
+            if (logs.stream().anyMatch(predicate)) {
+                return logs.stream().filter(predicate).findFirst().orElseThrow();
+            }
+            Thread.sleep(100);
+        }
+        throw new IllegalStateException("未在 8s 内等到匹配的操作日志");
+    }
+
+    @Test
+    @DisplayName("业务接口成功调用被记录为成功日志")
+    void success_request_recorded() throws Exception {
+        String token = adminToken();
+        cleanLogs();
+
+        mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk());
+
+        OperationLog log = awaitAnyMatch(l ->
+                l.getUrl() != null && l.getUrl().contains("/api/users")
+                        && l.getMethod().equals("GET") && l.getSuccess() == 1);
+        assertThat(log.getUserId()).isNotNull();
+        assertThat(log.getHttpStatus()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("业务失败（登录密码错误1002）被记录为失败日志")
+    void business_failure_recorded() throws Exception {
+        cleanLogs();
+
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + uniqueEmail("log") + "\",\"password\":\"wrong\"}"))
+                .andExpect(status().isOk());
+
+        OperationLog log = awaitAnyMatch(l ->
+                l.getUrl() != null && l.getUrl().contains("/auth/login")
+                        && l.getSuccess() == 0 && l.getErrorMsg() != null);
+        assertThat(log.getSuccess()).isZero();
+    }
+
+    @Test
+    @DisplayName("未登录访问受保护接口：401 由 Security 层补记失败日志")
+    void unauth_401_recorded() throws Exception {
+        cleanLogs();
+
+        mockMvc.perform(get("/api/users")).andExpect(status().isUnauthorized());
+
+        OperationLog log = awaitAnyMatch(l ->
+                l.getHttpStatus() == 401 && l.getSuccess() == 0
+                        && l.getUrl() != null && l.getUrl().contains("/api/users"));
+        assertThat(log.getHttpStatus()).isEqualTo(401);
+    }
+
+    @Test
+    @DisplayName("普通用户越权访问返回 403，切面记录失败日志")
+    void forbidden_403_recorded() throws Exception {
+        cleanLogs();
+        String normalToken = registerAndLoginGetToken(uniqueEmail("logforbid"), "abc123");
+        cleanLogs(); // 清掉注册/登录日志，使 403 请求独立可断言
+
+        mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(normalToken)))
+                .andExpect(status().isForbidden());
+
+        OperationLog log = awaitAnyMatch(l ->
+                l.getHttpStatus() == 403 && l.getSuccess() == 0
+                        && l.getUrl() != null && l.getUrl().contains("/api/users"));
+        assertThat(log.getHttpStatus()).isEqualTo(403);
+    }
+
+    @Test
+    @DisplayName("日志自带分页查询接口可用")
+    void log_pagination_query() throws Exception {
+        String token = adminToken();
+        cleanLogs();
+
+        mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(token))).andExpect(status().isOk());
+        mockMvc.perform(get("/api/roles/all").header("Authorization", bearerHeader(token))).andExpect(status().isOk());
+        awaitAnyMatch(l -> l.getUrl() != null && l.getUrl().contains("/api/roles/all"));
+
+        String result = mockMvc.perform(get("/api/logs")
+                        .header("Authorization", bearerHeader(token))
+                        .param("pageNum", "1").param("pageSize", "5"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        JsonNode json = objectMapper.readTree(result);
+        assertThat(json.path("code").asInt()).isEqualTo(200);
+        assertThat(json.path("data").path("records").size()).isGreaterThanOrEqualTo(1);
+        assertThat(json.path("data").path("total").asLong()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("支持按 id 删除与批量清空日志")
+    void delete_and_clear_log() throws Exception {
+        String token = adminToken();
+        cleanLogs();
+
+        mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(token))).andExpect(status().isOk());
+        OperationLog target = awaitAnyMatch(l ->
+                l.getUrl() != null && l.getUrl().contains("/api/users"));
+
+        // 按 id 删除
+        mockMvc.perform(delete("/api/logs/" + target.getId()).header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk());
+        assertThat(operationLogMapper.selectById(target.getId())).isNull();
+
+        // 清空（该请求本身被 AOP 排除不记录，等待异步队列排空后归零）
+        mockMvc.perform(delete("/api/logs").header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk());
+        long deadline = System.currentTimeMillis() + 5000;
+        while (System.currentTimeMillis() < deadline && logCount() > 0) {
+            Thread.sleep(100);
+        }
+        assertThat(logCount()).isZero();
+    }
+}
