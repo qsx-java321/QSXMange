@@ -38,6 +38,10 @@ public final class PermissionConstants {
     public static final String MENU_UPDATE = "menu:update";
     public static final String MENU_DELETE = "menu:delete";
 
+    // ---- 日志管理 ----
+    public static final String LOG_PAGE = "log:page";
+    public static final String LOG_DELETE = "log:delete";
+
     /** 菜单类型（对应 sys_permission.type） */
     public static final String TYPE_MENU = "MENU";
     /** 按钮权限类型（对应 sys_permission.type） */

@@ -102,6 +102,28 @@ CREATE TABLE sys_role_permission (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '角色-权限关联表';
 
 -- --------------------------------------------------
+-- 操作日志表（日志模块新增）
+-- 说明：日志为审计数据，生而不可变，无 deleted/update_time 字段
+-- --------------------------------------------------
+DROP TABLE IF EXISTS sys_operation_log;
+CREATE TABLE sys_operation_log (
+    id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+    user_id     BIGINT                DEFAULT NULL COMMENT '操作人ID（login/register 匿名为NULL）',
+    username    VARCHAR(128)          DEFAULT NULL COMMENT '操作人邮箱（冗余便于检索）',
+    method      VARCHAR(10)  NOT NULL COMMENT 'HTTP方法：GET/POST/PUT/DELETE',
+    url         VARCHAR(255) NOT NULL COMMENT '请求URL',
+    http_status INT          NOT NULL COMMENT 'HTTP响应状态码',
+    success     TINYINT      NOT NULL COMMENT '是否成功：0-失败，1-成功',
+    error_msg   VARCHAR(500)          DEFAULT NULL COMMENT '失败原因：业务码/权限/异常消息',
+    cost_ms     INT          NOT NULL DEFAULT 0 COMMENT '耗时（毫秒）',
+    create_time DATETIME              DEFAULT NULL COMMENT '操作时间',
+    PRIMARY KEY (id),
+    KEY idx_log_user (user_id),
+    KEY idx_log_success (success),
+    KEY idx_log_create (create_time)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '系统操作日志表';
+
+-- --------------------------------------------------
 -- 预置数据（幂等）
 -- 插入顺序：权限 → 角色 → 角色-权限 → 用户 → 用户-角色
 -- --------------------------------------------------
@@ -159,6 +181,27 @@ UPDATE sys_permission p
 JOIN sys_permission parent ON parent.code = 'system-menu'
 SET p.parent_id = parent.id
 WHERE p.code LIKE 'menu:%';
+
+-- --------------------------------------------------
+-- 1.5 日志管理菜单与按钮权限（日志模块新增，挂载点为 system 系统管理）
+-- --------------------------------------------------
+INSERT IGNORE INTO sys_permission (code, name, type, parent_id, path, component, icon, visible, sort, deleted) VALUES
+('system-log', '日志管理', 'MENU', 0, 'log', 'system/log', 'documentation', 1, 5, 0);
+
+INSERT IGNORE INTO sys_permission (code, name, type, parent_id, sort, deleted) VALUES
+('log:page',   '日志分页', 'PERMISSION', 0, 19, 0),
+('log:delete', '删除日志', 'PERMISSION', 0, 20, 0);
+
+-- 挂载归属：日志菜单挂到顶级，日志按钮权限挂到日志菜单下
+UPDATE sys_permission p
+JOIN sys_permission parent ON parent.code = 'system'
+SET p.parent_id = parent.id
+WHERE p.code = 'system-log';
+
+UPDATE sys_permission p
+JOIN sys_permission parent ON parent.code = 'system-log'
+SET p.parent_id = parent.id
+WHERE p.code LIKE 'log:%';
 
 -- 3. 超级管理员角色
 INSERT IGNORE INTO sys_role (code, name, description, status, deleted)
