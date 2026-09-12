@@ -2,7 +2,7 @@
 
 > 单体单模块、前后端分离的中小型后台管理系统
 
-当前已实现「认证中心（邮箱+密码+JWT）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」与「操作日志（AOP 访问审计）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。Redis 缓存、邮箱验证码等将在后续阶段接入。
+当前已实现「认证中心（邮箱+密码+JWT）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」「操作日志（AOP 访问审计）」与「用户 Excel 批量导入导出」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。Redis 缓存、邮箱验证码等将在后续阶段接入。
 
 ---
 
@@ -15,6 +15,7 @@
 | 持久层 | MyBatis-Plus 3.5.17（含分页插件、逻辑删除） |
 | 安全框架 | Spring Security + JWT（jjwt 0.12.6，HS384）+ `@PreAuthorize` 方法级鉴权 |
 | 切面 | Spring AOP（`spring-boot-starter-aop`）操作日志切面 + `@Async` 异步落库 |
+| Excel | EasyExcel 4.0.3（SAX 流式读写，导入解析上传流 / 导出直出响应流，不落盘） |
 | 数据库 | MySQL 8.x |
 | 密码加密 | BCrypt |
 | 接口风格 | RESTful，统一 `Result` / `PageResult` 返回 |
@@ -93,13 +94,14 @@ QSXManager
 
 ### 预置数据（幂等，`INSERT IGNORE`）
 - 6 个菜单（`system` 系统管理 → 用户/角色/权限/菜单/日志管理）
-- 20 个按钮权限码（`user:*` / `role:*` / `perm:*` / `menu:*` / `log:*`，与 `PermissionConstants` 一一对应，归属挂载到对应菜单下）
+- 22 个按钮权限码（`user:*` / `role:*` / `perm:*` / `menu:*` / `log:*`，与 `PermissionConstants` 一一对应，归属挂载到对应菜单下）
 - `ADMIN` 超级管理员角色，绑定全部菜单与权限
 - 超管账号 `admin@qsx.com / admin123`
 
 ### 关键特性
 - **逻辑删除释放邮箱**：用户被逻辑删除时，系统先把原 `email` 拼上 `#deleted_<时间戳>` 后缀，再置 `deleted=1`。原邮箱从唯一索引中腾出，**同一邮箱可正常重新注册使用**，已删除记录仍可追溯。
 - **整表替换授权**：分配角色/权限均先物理删旧关联、再批量插新。
+- **Excel 文件不落盘**：导入以输入流流式解析（SAX），导出/模板直接写响应流，服务器不产生临时文件；导入采用**整批校验 + 整体拒绝**，任一数据行不合法则全部不落库并返回错误明细。
 
 ## 四、业务功能
 
@@ -122,6 +124,9 @@ QSXManager
 | 修改用户 | `PUT /api/users/{id}` | `user:update` | 支持改名、改状态、改邮箱（唯一性校验） |
 | 删除用户 | `DELETE /api/users/{id}` | `user:delete` | 逻辑删除并释放邮箱 |
 | 分配角色 | `PUT /api/users/{id}/roles` | `user:assign-role` | 整表替换用户角色 |
+| 下载导入模板 | `GET /api/users/import/template` | `user:import` | 表头：邮箱/昵称/状态/角色编码 |
+| 批量导入 | `POST /api/users/import` | `user:import` | multipart 上传，整批校验整体拒绝，统一默认密码 |
+| 批量导出 | `GET /api/users/export` | `user:export` | 按筛选条件导出全量，不含密码 |
 
 ### 角色管理（需登录 + 权限）
 
@@ -202,6 +207,8 @@ QSXManager
 | 1014 | 存在子菜单，无法删除 |
 | 1015 | 父菜单无效 |
 | 1016 | 菜单或权限标识已存在 |
+| 1017 | 导入数据校验失败（含错误行明细） |
+| 1018 | 导入数据量超过限制 |
 
 ## 六、快速开始
 
