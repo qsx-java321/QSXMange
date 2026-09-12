@@ -2,6 +2,7 @@ package com.qsx.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.qsx.common.constant.RoleConstants;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.PageResult;
 import com.qsx.common.result.ResultCode;
@@ -12,11 +13,14 @@ import com.qsx.domain.entity.UserRole;
 import com.qsx.mapper.RoleMapper;
 import com.qsx.mapper.UserMapper;
 import com.qsx.mapper.UserRoleMapper;
+import com.qsx.security.util.SecurityUtils;
+import com.qsx.service.RefreshTokenService;
 import com.qsx.service.UserService;
 import com.qsx.web.dto.query.UserQuery;
 import com.qsx.web.dto.request.UserCreateRequest;
 import com.qsx.web.dto.request.UserUpdateRequest;
 import com.qsx.web.vo.UserVO;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -30,6 +34,7 @@ import java.util.stream.Collectors;
 /**
  * 用户管理服务实现
  */
+@Slf4j
 @Service
 public class UserServiceImpl implements UserService {
 
@@ -40,17 +45,20 @@ public class UserServiceImpl implements UserService {
     private final UserRoleMapper userRoleMapper;
     private final RoleMapper roleMapper;
     private final ApplicationEventPublisher eventPublisher;
+    private final RefreshTokenService refreshTokenService;
 
     public UserServiceImpl(UserMapper userMapper,
                            PasswordEncoder passwordEncoder,
                            UserRoleMapper userRoleMapper,
                            RoleMapper roleMapper,
-                           ApplicationEventPublisher eventPublisher) {
+                           ApplicationEventPublisher eventPublisher,
+                           RefreshTokenService refreshTokenService) {
         this.userMapper = userMapper;
         this.passwordEncoder = passwordEncoder;
         this.userRoleMapper = userRoleMapper;
         this.roleMapper = roleMapper;
         this.eventPublisher = eventPublisher;
+        this.refreshTokenService = refreshTokenService;
     }
 
     @Override
@@ -109,6 +117,16 @@ public class UserServiceImpl implements UserService {
 
         user.setEmail(request.getEmail());
         user.setNickname(request.getNickname());
+
+        // 禁用保护：status=1（禁用）时——禁止禁用自己、超管不可禁用，防止误操作锁死系统
+        if (request.getStatus() != null && request.getStatus() == 1) {
+            if (id.equals(SecurityUtils.getCurrentUserId())) {
+                throw new BusinessException(ResultCode.CANNOT_OPERATE_SELF);
+            }
+            if (userMapper.selectRoleCodes(id).contains(RoleConstants.ADMIN)) {
+                throw new BusinessException(ResultCode.ADMIN_USER_CANNOT_DISABLE);
+            }
+        }
         user.setStatus(request.getStatus());
         userMapper.updateById(user);
         return UserVO.from(user);
@@ -130,6 +148,13 @@ public class UserServiceImpl implements UserService {
 
         // 逻辑删除（deleted -> 1）
         userMapper.deleteById(id);
+
+        // 同步清理刷新会话；Redis 异常仅告警，不阻断删除（删除语义优先）
+        try {
+            refreshTokenService.remove(id);
+        } catch (Exception e) {
+            log.warn("删除用户时清理刷新会话失败, userId={}", id, e);
+        }
 
         // 事务提交后失效该用户权限缓存
         eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.USER, id));
@@ -169,6 +194,24 @@ public class UserServiceImpl implements UserService {
 
         // 事务提交后失效该用户权限缓存
         eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.USER, userId));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void kick(Long id) {
+        if (userMapper.selectById(id) == null) {
+            throw new BusinessException(ResultCode.USER_NOT_FOUND);
+        }
+        // 不允许踢自己（操作者的会话由自己登出）
+        if (id.equals(SecurityUtils.getCurrentUserId())) {
+            throw new BusinessException(ResultCode.CANNOT_OPERATE_SELF);
+        }
+        // 内置超管不可被强制登出，避免误操作导致系统失去掌控
+        if (userMapper.selectRoleCodes(id).contains(RoleConstants.ADMIN)) {
+            throw new BusinessException(ResultCode.ADMIN_USER_CANNOT_KICK);
+        }
+        // 删除目标刷新会话；Redis 异常不静默（fail-closed），由全局兜底返回 500
+        refreshTokenService.remove(id);
     }
 
     @Override

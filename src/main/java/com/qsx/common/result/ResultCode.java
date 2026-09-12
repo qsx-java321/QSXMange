@@ -43,7 +43,13 @@ public enum ResultCode {
 
     // Excel 导入导出 (1017 起)
     IMPORT_VALIDATE_FAILED(1017, "导入数据校验失败"),
-    IMPORT_DATA_TOO_LARGE(1018, "导入数据量超过限制");
+    IMPORT_DATA_TOO_LARGE(1018, "导入数据量超过限制"),
+
+    // 会话管理 (1019 起)
+    REFRESH_TOKEN_INVALID(1019, "刷新令牌无效或已过期"),
+    ADMIN_USER_CANNOT_DISABLE(1020, "内置超管用户不可禁用"),
+    ADMIN_USER_CANNOT_KICK(1021, "内置超管用户不可强制登出"),
+    CANNOT_OPERATE_SELF(1022, "不允许对自己执行该操作");
 
     private final int code;
     private final String message;

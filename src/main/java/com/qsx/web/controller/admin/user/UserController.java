@@ -70,4 +70,11 @@ public class UserController {
         userService.assignRoles(id, request.getRoleIds());
         return Result.success();
     }
+
+    @PostMapping("/{id}/kick")
+    @PreAuthorize("hasAuthority('" + PermissionConstants.USER_KICK + "')")
+    public Result<Void> kick(@PathVariable Long id) {
+        userService.kick(id);
+        return Result.success();
+    }
 }

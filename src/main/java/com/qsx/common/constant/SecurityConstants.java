@@ -20,6 +20,9 @@ public final class SecurityConstants {
     /** 注册接口 */
     public static final String REGISTER_URL = "/auth/register";
 
+    /** 刷新令牌接口（匿名放行） */
+    public static final String REFRESH_URL = "/auth/refresh";
+
     /** 匿名放行路径 */
     public static final String[] WHITELIST = {
             "/auth/login",

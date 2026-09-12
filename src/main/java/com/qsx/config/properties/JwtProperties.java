@@ -15,8 +15,14 @@ public class JwtProperties {
     /** 密钥 */
     private String secret;
 
-    /** 过期时间（毫秒） */
+    /** access token 过期时间（毫秒） */
     private Long expiration;
+
+    /** refresh token 过期时间（毫秒），每次续期重置（滑动续期） */
+    private Long refreshExpiration;
+
+    /** refresh token 绝对有效上限（毫秒），自首次登录起算 */
+    private Long refreshMaxLifetime;
 
     /** 请求头名称 */
     private String header;

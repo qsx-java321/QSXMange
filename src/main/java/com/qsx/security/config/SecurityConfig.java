@@ -67,7 +67,8 @@ public class SecurityConfig {
                         .accessDeniedHandler(accessDeniedHandler))
                 // 授权规则
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(SecurityConstants.REGISTER_URL, SecurityConstants.LOGIN_URL).permitAll()
+                        .requestMatchers(SecurityConstants.REGISTER_URL, SecurityConstants.LOGIN_URL,
+                                SecurityConstants.REFRESH_URL).permitAll()
                         .anyRequest().authenticated())
                 // 添加 JWT 过滤器
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

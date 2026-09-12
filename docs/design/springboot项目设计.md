@@ -504,9 +504,11 @@ RBAC模型:
 
     - Spring Security 管理认证与授权
 
-    - JWT 保存登录状态
+    - JWT（access token，30 分钟短期）保存登录状态
 
-    - Redis 保存验证码、Token 黑名单、权限缓存
+    - refresh token（32 字节随机串，仅存 SHA-256 哈希于 Redis）承载会话，key=qsx:auth:refresh:{userId}，单端登录、滑动续期 7 天 + 30 天绝对上限
+
+    - Redis 保存权限缓存（qsx:auth:perm:{userId}）、刷新会话；会话链路 Redis 异常 fail-closed（拒绝续期），权限缓存降级回源 MySQL
 
     - 方法上使用 PreAuthorize 校验权限标识
 
@@ -516,41 +518,61 @@ RBAC模型:
 
   注册:
 
-    - 用户提交邮箱、验证码、密码
+    - 用户提交邮箱、密码
 
     - 校验邮箱是否已注册
 
-    - 校验 Redis 中的邮箱验证码
-
     - BCrypt 加密密码
 
-    - 保存用户，默认启用，可分配默认角色
+    - 保存用户，默认启用
 
   登录:
 
     - 用户提交邮箱和密码
 
-    - Spring Security 进行认证
+    - Spring Security 进行认证（实时查库，禁用账号 1003）
 
-    - 认证成功后生成 JWT
+    - 认证成功后生成 access token（JWT，30 分钟）+ refresh token（写 Redis，覆盖旧会话实现单端登录）
 
-    - 返回 Token、用户信息、角色、权限
+    - 返回 token、refreshToken、用户信息、角色、权限
 
   请求鉴权:
 
-    - JwtAuthenticationFilter 解析 Token
+    - JwtAuthenticationFilter 解析 token，实时查库加载用户并校验 status（禁用即 401）
 
-    - 校验 Token 是否有效、是否在黑名单
+    - 校验 token 签名与过期
 
-    - 加载用户权限并写入 SecurityContext
+    - 加载用户权限（Redis 缓存优先）并写入 SecurityContext
 
     - Spring Security 根据权限决定是否放行
 
+  刷新令牌（access 过期后）:
+
+    - 客户端传 {userId, refreshToken} 调 POST /auth/refresh
+
+    - 实时查库校验用户存在且未禁用（安全兜底）
+
+    - 校验 Redis 中 hash 匹配 + 未超 30 天绝对上限，通过后轮换：删旧 refresh、发新 refresh + 新 access
+
+    - 旧 refresh 一经使用立即失效（重放即 1019），Redis 异常 fail-closed 返回 1019
+
   登出:
 
-    - 将 Token 加入 Redis 黑名单
+    - POST /auth/logout 删除当前用户 refresh 会话（Redis 异常降级成功）
 
-    - 清理在线用户状态
+  管理员强制登出（踢下线）:
+
+    - 持 user:kick 权限调 POST /api/users/{id}/kick
+
+    - 禁止踢自己（1022）、禁止踢内置超管（1021）
+
+    - 删除目标用户 refresh 会话；其当前 access 最长再用 30 分钟，需重新登录
+
+  禁用/解冻:
+
+    - PUT /api/users/{id} 传 status 0/1（沿用 update 链路）；禁用自己的旧 access 即时 401、refresh 拒绝续期
+
+    - 保护：禁止禁用自己（1022）、禁止禁内置超管（1020）；删除用户时联动清理 refresh 会话
 
   异常:
 

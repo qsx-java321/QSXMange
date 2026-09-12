@@ -45,6 +45,11 @@ public interface UserService {
     void assignRoles(Long userId, List<Long> roleIds);
 
     /**
+     * 管理员强制登出：删除目标用户的刷新会话（不改变账号状态）
+     */
+    void kick(Long id);
+
+    /**
      * 按邮箱查询用户（未被逻辑删除）
      */
     User getByEmail(String email);

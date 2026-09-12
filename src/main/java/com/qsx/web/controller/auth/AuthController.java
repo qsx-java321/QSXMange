@@ -4,8 +4,10 @@ import com.qsx.common.result.Result;
 import com.qsx.service.AuthService;
 import com.qsx.web.dto.request.ChangePasswordRequest;
 import com.qsx.web.dto.request.LoginRequest;
+import com.qsx.web.dto.request.RefreshRequest;
 import com.qsx.web.dto.request.RegisterRequest;
 import com.qsx.web.vo.LoginVO;
+import com.qsx.web.vo.RefreshVO;
 import com.qsx.web.vo.UserVO;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -36,6 +38,17 @@ public class AuthController {
     @PostMapping("/login")
     public Result<LoginVO> login(@Valid @RequestBody LoginRequest request) {
         return Result.success(authService.login(request));
+    }
+
+    @PostMapping("/refresh")
+    public Result<RefreshVO> refresh(@Valid @RequestBody RefreshRequest request) {
+        return Result.success(authService.refresh(request));
+    }
+
+    @PostMapping("/logout")
+    public Result<Void> logout() {
+        authService.logout();
+        return Result.success();
     }
 
     @GetMapping("/me")

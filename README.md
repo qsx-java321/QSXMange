@@ -2,7 +2,7 @@
 
 > 单体单模块、前后端分离的中小型后台管理系统
 
-当前已实现「认证中心（邮箱+密码+JWT）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」「操作日志（AOP 访问审计）」「用户 Excel 批量导入导出」与「RBAC 权限缓存（Redis）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。邮箱验证码、Token 黑名单等将在后续阶段接入。
+当前已实现「认证中心（邮箱+密码+JWT 短期令牌 + refresh token 会话）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」「操作日志（AOP 访问审计）」「用户 Excel 批量导入导出」与「RBAC 权限缓存（Redis）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。用户登出、管理员强制登出（踢下线）、账号禁用/解冻均已在会话层打通。邮箱验证码、access token 黑名单（即时踢下线）等将在后续阶段接入。
 
 ---
 
@@ -14,6 +14,7 @@
 | 框架 | Spring Boot 3.5.16 |
 | 持久层 | MyBatis-Plus 3.5.17（含分页插件、逻辑删除） |
 | 安全框架 | Spring Security + JWT（jjwt 0.12.6，HS384）+ `@PreAuthorize` 方法级鉴权 |
+| 会话管理 | refresh token 存 Redis（单端登录、滑动续期 7 天 + 30 天绝对上限），支持登出与管理员强制登出 |
 | 权限缓存 | Redis 7.4.x（`spring-boot-starter-data-redis`，用户权限码缓存，未命中回源 MySQL 并回填） |
 | 切面 | Spring AOP（`spring-boot-starter-aop`）操作日志切面 + `@Async` 异步落库 |
 | Excel | EasyExcel 4.0.3（SAX 流式读写，导入解析上传流 / 导出直出响应流，不落盘） |
@@ -21,7 +22,7 @@
 | 密码加密 | BCrypt |
 | 接口风格 | RESTful，统一 `Result` / `PageResult` 返回 |
 
-> 说明：采用**纯 JWT 无状态认证**。角色/权限码经 **Redis 缓存**（key=`qsx:auth:perm:{userId}`，仅缓存权限码，用户行/密码/状态仍实时查库），未命中回源 MySQL 并回填；权限/角色/用户变更在**事务提交后失效**相关缓存（`@TransactionalEventListener` AFTER_COMMIT），变更即时生效。登出依靠客户端清除 Token，Token 黑名单将在后续阶段接入。Redis 异常自动降级为实时查库，可用 `qsx.rbac-cache.enabled=false` 一键关闭缓存。
+> 说明：采用 **JWT（access 短期 30 分钟）+ refresh token（存 Redis）** 双令牌会话。access token 无状态，仅在每次请求时校验签名、过期与用户状态（实时查库）；refresh token 为 32 字节随机串（仅存 SHA-256 哈希），key=`qsx:auth:refresh:{userId}`，单端登录（新登录覆盖旧会话），滑动续期（每次刷新重置 7 天）、自首次登录起 30 天绝对上限。刷新采用**轮换**语义（旧 refresh 一经使用立即失效）。角色/权限码经 **Redis 缓存**（key=`qsx:auth:perm:{userId}`，仅缓存权限码，用户行/密码/状态仍实时查库），未命中回源 MySQL 并回填；权限/角色/用户变更在**事务提交后失效**相关缓存（`@TransactionalEventListener` AFTER_COMMIT），变更即时生效。**禁用账号（status=1）即自带踢下线**：access 请求实时校验状态返回 401、refresh 续期被拒；管理员也可仅删除目标用户 refresh 会话实现「强制登出」。redis 异常策略：权限缓存降级回源；会话链路 **fail-closed**（拒绝续期），可用 `qsx.rbac-cache.enabled=false` 关闭权限缓存。
 
 ## 二、项目结构
 
@@ -108,12 +109,14 @@ QSXManager
 
 ## 四、业务功能
 
-### 认证中心（邮箱 + 密码 + JWT）
+### 认证中心（邮箱 + 密码 + JWT + refresh token）
 
 | 功能 | 接口 | 说明 |
 |------|------|------|
 | 注册 | `POST /auth/register` | 邮箱+密码注册，默认启用 |
-| 登录 | `POST /auth/login` | 校验通过返回 JWT 与用户信息（含角色码、权限码） |
+| 登录 | `POST /auth/login` | 校验通过返回 access token + refresh token 与用户信息（含角色码、权限码） |
+| 刷新令牌 | `POST /auth/refresh` | body 传 `{userId, refreshToken}`，换取新令牌对（旧 refresh 立即失效），滑动续期、30 天绝对上限 |
+| 登出 | `POST /auth/logout` | 删除当前用户刷新会话，access token 侧由前端清除 |
 | 当前用户 | `GET /auth/me` | 返回当前登录用户信息 |
 | 修改密码 | `POST /auth/change-password` | 需校验原密码 |
 
@@ -124,9 +127,10 @@ QSXManager
 | 分页查询 | `GET /api/users` | `user:page` | 支持 email / nickname / status 筛选 |
 | 用户详情 | `GET /api/users/{id}` | `user:get` | |
 | 新增用户 | `POST /api/users` | `user:create` | 需唯一邮箱 |
-| 修改用户 | `PUT /api/users/{id}` | `user:update` | 支持改名、改状态、改邮箱（唯一性校验） |
-| 删除用户 | `DELETE /api/users/{id}` | `user:delete` | 逻辑删除并释放邮箱 |
+| 修改用户 | `PUT /api/users/{id}` | `user:update` | 支持改名、改状态（禁用/解冻）、改邮箱（唯一性校验）；**禁止禁用自己、禁止禁用内置超管** |
+| 删除用户 | `DELETE /api/users/{id}` | `user:delete` | 逻辑删除并释放邮箱，联动清理刷新会话 |
 | 分配角色 | `PUT /api/users/{id}/roles` | `user:assign-role` | 整表替换用户角色 |
+| 强制登出 | `POST /api/users/{id}/kick` | `user:kick` | 删除目标用户刷新会话（踢下线，账号不受影响）；**禁止踢自己、禁止踢内置超管** |
 | 下载导入模板 | `GET /api/users/import/template` | `user:import` | 表头：邮箱/昵称/状态/角色编码 |
 | 批量导入 | `POST /api/users/import` | `user:import` | multipart 上传，整批校验整体拒绝，统一默认密码 |
 | 批量导出 | `GET /api/users/export` | `user:export` | 按筛选条件导出全量，不含密码 |
@@ -176,8 +180,9 @@ QSXManager
 | 清空日志 | `DELETE /api/logs` | `log:delete` | 物理清空全部 |
 
 ### 鉴权说明
-- `/auth/register`、`/auth/login` 匿名放行；
-- 其余接口需携带请求头 `Authorization: Bearer <token>`；
+- `/auth/register`、`/auth/login`、`/auth/refresh` 匿名放行；
+- 其余接口需携带请求头 `Authorization: Bearer <access token>`；
+- access token 有效期 30 分钟，过期后前端应调用 `/auth/refresh` 静默换新（refresh 为**单飞**设计：并发刷新由前端互斥，后端约定旧 refresh 一经轮换即失效）；refresh 无效/过期返回 1019，前端应清登录态引导重新登录；
 - URL 级 `authenticated()` + 方法级 `@PreAuthorize` 权限码校验（双保险），权限码经 Redis 缓存加载（未命中回源 MySQL，权限变更事务提交后即时失效）；
 - 未登录返回 401，无权限返回 403，参数校验失败返回 400，均统一为 JSON 格式。
 
@@ -212,6 +217,10 @@ QSXManager
 | 1016 | 菜单或权限标识已存在 |
 | 1017 | 导入数据校验失败（含错误行明细） |
 | 1018 | 导入数据量超过限制 |
+| 1019 | 刷新令牌无效或已过期（需重新登录） |
+| 1020 | 内置超管用户不可禁用 |
+| 1021 | 内置超管用户不可强制登出 |
+| 1022 | 不允许对自己执行该操作 |
 
 ## 六、快速开始
 
@@ -268,7 +277,8 @@ mvn clean test
 ## 七、后续规划
 
 - [x] RBAC 权限缓存（Redis，含失效与降级）
-- [ ] Token 黑名单（登出失效）
+- [x] 会话管理（登录/登出/强制登出/禁用联动，refresh token 轮换续期）
+- [ ] access token 黑名单（禁用/踢人即时中断，当前依赖实时查库 status 与 30 分钟令牌窗口）
 - [ ] 邮箱验证码注册
 - [ ] 登录日志（操作日志已实现）
 - [ ] 前端管理界面（对接菜单树动态路由）

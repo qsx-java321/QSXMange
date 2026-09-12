@@ -17,6 +17,7 @@
 --   v1.0  RBAC 权限管理：sys_role / sys_permission / sys_user_role / sys_role_permission + 预置数据
 --   v1.5  操作日志：sys_operation_log + 日志菜单/按钮权限
 --   v1.6  Excel 批量导入导出权限：user:import / user:export
+--   v1.7  会话管理（refresh token）：user:kick 强制登出权限
 -- =============================================
 
 -- 建库（幂等，统一 utf8mb4 字符集与排序规则）
@@ -235,6 +236,18 @@ UPDATE sys_permission p
 JOIN sys_permission parent ON parent.code = 'system-user'
 SET p.parent_id = parent.id
 WHERE p.code IN ('user:import', 'user:export');
+
+-- --------------------------------------------------
+-- 1.7 强制登出（踢下线）权限（会话管理新增）
+-- --------------------------------------------------
+INSERT IGNORE INTO sys_permission (code, name, type, parent_id, sort, deleted) VALUES
+('user:kick', '强制登出用户', 'PERMISSION', 0, 23, 0);
+
+-- 挂载归属：强制登出按钮权限挂到用户管理菜单下
+UPDATE sys_permission p
+JOIN sys_permission parent ON parent.code = 'system-user'
+SET p.parent_id = parent.id
+WHERE p.code = 'user:kick';
 
 -- 3. 超级管理员角色
 INSERT IGNORE INTO sys_role (code, name, description, status, deleted)

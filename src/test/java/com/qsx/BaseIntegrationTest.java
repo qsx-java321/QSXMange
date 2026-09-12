@@ -20,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -58,32 +59,48 @@ public abstract class BaseIntegrationTest {
     @Autowired
     protected UserService userService;
 
+    @Autowired
+    protected org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
     /** RBAC 权限缓存 key 前缀（与 PermissionCacheServiceImpl 保持一致） */
     private static final String RBAC_CACHE_KEY_PREFIX = "qsx:auth:perm:";
 
+    /** 刷新会话 key 前缀（与 RefreshTokenServiceImpl 保持一致） */
+    private static final String REFRESH_SESSION_KEY_PREFIX = "qsx:auth:refresh:";
+
+    /** 登录会话（token / refreshToken / userId / email） */
+    protected record LoginSession(String token, String refreshToken, Long userId, String email) {
+    }
+
     @BeforeEach
     void cleanDatabase() {
-        // 清空用户表与用户-角色关联，保证用例隔离（角色/权限为常驻种子数据，不清理）
-        userRoleMapper.delete(null);
-        userMapper.delete(null);
+        // 物理清空用户与用户-角色关联，保证用例隔离（角色/权限为常驻种子数据，不清理）。
+        // 注意：不能用 userMapper.delete(null)——MyBatis-Plus 对带 @TableLogic 的实体
+        // 会执行逻辑删除（UPDATE deleted=1），既不隔离用例、又污染预置数据。
+        jdbcTemplate.update("DELETE FROM sys_user_role");
+        jdbcTemplate.update("DELETE FROM sys_user");
         cleanPermissionCache();
     }
 
     @AfterEach
     void tearDown() {
-        userRoleMapper.delete(null);
-        userMapper.delete(null);
+        jdbcTemplate.update("DELETE FROM sys_user_role");
+        jdbcTemplate.update("DELETE FROM sys_user");
         cleanPermissionCache();
     }
 
     /**
-     * 清理 RBAC 权限缓存 key（避免跨用例污染；Redis 不可用时静默跳过）
+     * 清理 RBAC 权限缓存与刷新会话 key（避免跨用例污染；Redis 不可用时静默跳过）
      */
     private void cleanPermissionCache() {
         try {
             Set<String> keys = stringRedisTemplate.keys(RBAC_CACHE_KEY_PREFIX + "*");
             if (keys != null && !keys.isEmpty()) {
                 stringRedisTemplate.delete(keys);
+            }
+            Set<String> refreshKeys = stringRedisTemplate.keys(REFRESH_SESSION_KEY_PREFIX + "*");
+            if (refreshKeys != null && !refreshKeys.isEmpty()) {
+                stringRedisTemplate.delete(refreshKeys);
             }
         } catch (Exception e) {
             // Redis 不可用则忽略（业务侧已降级为实时查库）
@@ -126,6 +143,34 @@ public abstract class BaseIntegrationTest {
                 .andReturn();
         JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
         return json.path("data").path("token").asText();
+    }
+
+    /**
+     * 注册并登录，返回完整会话（token / refreshToken / userId / email）。
+     * 内部先注册再登录（重复注册返回 1001 属幂等场景，不影响后续登录）。
+     */
+    protected LoginSession loginGetAuth(String email, String password) throws Exception {
+        register(email, password);
+        MvcResult result = mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + email + "\",\"password\":\"" + password + "\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode data = objectMapper.readTree(result.getResponse().getContentAsString()).path("data");
+        return new LoginSession(data.path("token").asText(),
+                data.path("refreshToken").asText(),
+                data.path("userId").asLong(),
+                data.path("email").asText());
+    }
+
+    /**
+     * 通用：POST 一个 JSON body，返回 MvcResult（不校验状态码）
+     */
+    protected MvcResult postJson(String url, Object body) throws Exception {
+        return mockMvc.perform(post(url)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andReturn();
     }
 
     /**

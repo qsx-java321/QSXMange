@@ -21,6 +21,7 @@ public final class PermissionConstants {
     public static final String USER_ASSIGN_ROLE = "user:assign-role";
     public static final String USER_IMPORT = "user:import";
     public static final String USER_EXPORT = "user:export";
+    public static final String USER_KICK = "user:kick";
 
     // ---- 角色管理 ----
     public static final String ROLE_PAGE = "role:page";

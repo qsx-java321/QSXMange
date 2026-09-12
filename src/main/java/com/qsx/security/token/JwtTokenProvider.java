@@ -8,7 +8,9 @@ import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.util.Date;
+import java.util.HexFormat;
 
 /**
  * JWT 生成与解析
@@ -18,6 +20,7 @@ public class JwtTokenProvider {
 
     private final JwtProperties jwtProperties;
     private final SecretKey secretKey;
+    private final SecureRandom secureRandom = new SecureRandom();
 
     public JwtTokenProvider(JwtProperties jwtProperties) {
         this.jwtProperties = jwtProperties;
@@ -44,6 +47,16 @@ public class JwtTokenProvider {
      */
     public String parseEmail(String token) {
         return parseClaims(token).getSubject();
+    }
+
+    /**
+     * 生成刷新令牌：32 字节安全随机数（Hex 编码），非 JWT、不可伪造、不可解析出用户信息。
+     * 仅以哈希形式存 Redis（qsx:auth:refresh:{userId}），原始值只下发给客户端。
+     */
+    public String generateRefreshToken() {
+        byte[] bytes = new byte[32];
+        secureRandom.nextBytes(bytes);
+        return HexFormat.of().formatHex(bytes);
     }
 
     /**
