@@ -19,3 +19,6 @@ Thumbs.db
 
 # 本地环境配置（避免泄露密钥）
 *.local.yml
+
+# TRAE 工具数据目录（文档迁移至 docs/ 统一管理）
+.trae/
