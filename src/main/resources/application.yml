@@ -9,6 +9,11 @@ spring:
     url: jdbc:mysql://localhost:3306/QSXManager?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: root
     password: "123456"
+  servlet:
+    multipart:
+      # Excel 导入上传大小限制
+      max-file-size: 10MB
+      max-request-size: 10MB
 
 mybatis-plus:
   # Mapper XML 位置
@@ -25,6 +30,11 @@ mybatis-plus:
       logic-delete-field: deleted
       logic-delete-value: 1
       logic-not-delete-value: 0
+
+# Excel 导入自定义配置
+import:
+  # 批量导入用户的默认初始密码（上线前务必替换并妥善保管）
+  default-password: qsx123456
 
 # JWT 自定义配置
 jwt:

@@ -39,7 +39,11 @@ public enum ResultCode {
     MENU_NOT_FOUND(1013, "菜单不存在"),
     MENU_HAS_CHILDREN(1014, "存在子菜单，无法删除"),
     MENU_PARENT_INVALID(1015, "父菜单无效"),
-    PERMISSION_CODE_EXISTS(1016, "菜单或权限标识已存在");
+    PERMISSION_CODE_EXISTS(1016, "菜单或权限标识已存在"),
+
+    // Excel 导入导出 (1017 起)
+    IMPORT_VALIDATE_FAILED(1017, "导入数据校验失败"),
+    IMPORT_DATA_TOO_LARGE(1018, "导入数据量超过限制");
 
     private final int code;
     private final String message;

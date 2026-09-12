@@ -203,6 +203,19 @@ JOIN sys_permission parent ON parent.code = 'system-log'
 SET p.parent_id = parent.id
 WHERE p.code LIKE 'log:%';
 
+-- --------------------------------------------------
+-- 1.6 Excel 批量导入导出权限（用户管理模块新增）
+-- --------------------------------------------------
+INSERT IGNORE INTO sys_permission (code, name, type, parent_id, sort, deleted) VALUES
+('user:import', '批量导入用户', 'PERMISSION', 0, 21, 0),
+('user:export', '批量导出用户', 'PERMISSION', 0, 22, 0);
+
+-- 挂载归属：导入导出按钮权限挂到用户管理菜单下
+UPDATE sys_permission p
+JOIN sys_permission parent ON parent.code = 'system-user'
+SET p.parent_id = parent.id
+WHERE p.code IN ('user:import', 'user:export');
+
 -- 3. 超级管理员角色
 INSERT IGNORE INTO sys_role (code, name, description, status, deleted)
 VALUES ('ADMIN', '超级管理员', '系统内置超管，绑定全部权限', 0, 0);
