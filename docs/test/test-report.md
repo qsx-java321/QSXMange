@@ -9,7 +9,7 @@
 | 数据库 | MySQL 8.4（本地 Docker，`localhost:3306/QSXManager`） |
 | 缓存 | Redis 7.4.9（本地 Docker，`localhost:6379`，RBAC 权限缓存） |
 | 应用地址 | `http://localhost:8080` |
-| 测试方式 | ① 自动化集成测试 `mvn test`（MockMvc + 真实 MySQL/Redis） ② 真实 HTTP 调用（PowerShell 脚本，逐接口记录请求与响应） |
+| 测试方式 | ① 自动化集成测试 `mvn test`（MockMvc + 真实 MySQL/Redis） ② 真实 HTTP 调用（启动应用逐接口调用，记录请求与响应） |
 
 **测试结果总览**
 
@@ -140,7 +140,7 @@
 |------|------|------|
 | 预置中文乱码（admin 昵称"超级管理员"、菜单/权限名显示为 mojibake） | 历史某次 `init.sql` 导入未指定 `--default-character-set=utf8mb4`（见 `docs/dev-env/组件依赖README.md` 警告），UTF-8 字节被误转 | 已按 `init.sql` 字面量执行 `UPDATE` 修复 30 处预置中文（用户 1 / 角色 1 / 权限 28），并清空相关权限缓存 |
 | admin 账号登录报「邮箱或密码错误」 | 自动化测试基类 `@BeforeEach/@AfterEach` 对 `sys_user` 全表逻辑删除，预置 admin 被一并置 `deleted=1` | 已恢复 `deleted=0` 并重建 admin↔ADMIN 角色关联，清空其权限缓存 |
-| 历史测试残留数据（逻辑删除用户、测试角色/菜单） | 自动化测试长期复用本地库产生 | 已物理清理（`docs/test/fix-data.sql`），仅保留预置 admin/ADMIN/28 权限 |
+| 历史测试残留数据（逻辑删除用户、测试角色/菜单） | 自动化测试长期复用本地库产生 | 已物理清理测试残留数据，仅保留预置 admin/ADMIN/28 权限 |
 
 > 以上均为**数据/测试环境问题**，非业务代码缺陷；代码层面未发现需修复项。
 
@@ -155,4 +155,4 @@
 
 ---
 
-*生成方式：真实 HTTP 调用见 `docs/test/run-api-test.ps1`（可复现），原始请求/响应数据见 `docs/test/api-test-results.json`；数据修复脚本见 `docs/test/fix-data.sql`。*
+*原始请求/响应数据见 `docs/test/api-test-results.json`。*
