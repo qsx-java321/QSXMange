@@ -2,8 +2,28 @@
 --  QSX 后台管理系统 - 基础版建表脚本
 --  数据库: QSXManager
 -- =============================================
+-- 使用说明（破坏性警告）：
+--   本脚本为【首次初始化 / 全量重建】脚本，会 DROP 并重建全部 6 张表，
+--   执行将清空数据库中的所有数据，已有环境请勿直接重跑！
+--   初始化方式（二选一）：
+--     ① mysql 客户端：
+--        mysql --default-character-set=utf8mb4 -uroot -p123456 < sql/init.sql
+--     ② docker（推荐）：
+--        docker cp sql/init.sql mysql:/tmp/init.sql
+--        docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 < /tmp/init.sql"
+--   脚本自包含建库（CREATE DATABASE IF NOT EXISTS）并声明会话字符集（SET NAMES utf8mb4），
+--   与客户端 --default-character-set=utf8mb4 形成双保险，防止中文乱码。
+-- 变更历史：
+--   v1.0  RBAC 权限管理：sys_role / sys_permission / sys_user_role / sys_role_permission + 预置数据
+--   v1.5  操作日志：sys_operation_log + 日志菜单/按钮权限
+--   v1.6  Excel 批量导入导出权限：user:import / user:export
+-- =============================================
 
+-- 建库（幂等，统一 utf8mb4 字符集与排序规则）
+CREATE DATABASE IF NOT EXISTS QSXManager DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 USE QSXManager;
+-- 声明会话字符集（与客户端 --default-character-set=utf8mb4 双保险）
+SET NAMES utf8mb4;
 
 -- --------------------------------------------------
 -- 用户表
@@ -24,7 +44,7 @@ CREATE TABLE sys_user (
     deleted     TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0-正常，1-已删除',
     PRIMARY KEY (id),
     UNIQUE KEY uk_email (email)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '系统用户表';
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '系统用户表';
 
 -- =============================================
 --  RBAC 权限管理（rbac 分支新增）
@@ -47,7 +67,7 @@ CREATE TABLE sys_role (
     deleted     TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0-正常，1-已删除',
     PRIMARY KEY (id),
     UNIQUE KEY uk_role_code (code)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '系统角色表';
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '系统角色表';
 
 -- --------------------------------------------------
 -- 权限表（权限码模型，code 即业务权限标识，如 user:add）
@@ -71,7 +91,7 @@ CREATE TABLE sys_permission (
     deleted     TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除：0-正常，1-已删除',
     PRIMARY KEY (id),
     UNIQUE KEY uk_perm_code (code)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '系统权限表（菜单+按钮权限）';
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '系统权限表（菜单+按钮权限）';
 
 -- --------------------------------------------------
 -- 用户-角色关联表（纯关系表，整表替换语义，物理删除，无逻辑删除字段）
@@ -85,7 +105,7 @@ CREATE TABLE sys_user_role (
     PRIMARY KEY (id),
     UNIQUE KEY uk_user_role (user_id, role_id),
     KEY idx_user_role_role_id (role_id)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户-角色关联表';
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '用户-角色关联表';
 
 -- --------------------------------------------------
 -- 角色-权限关联表（纯关系表，整表替换语义，物理删除，无逻辑删除字段）
@@ -99,7 +119,7 @@ CREATE TABLE sys_role_permission (
     PRIMARY KEY (id),
     UNIQUE KEY uk_role_perm (role_id, permission_id),
     KEY idx_role_perm_perm_id (permission_id)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '角色-权限关联表';
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '角色-权限关联表';
 
 -- --------------------------------------------------
 -- 操作日志表（日志模块新增）
@@ -121,7 +141,7 @@ CREATE TABLE sys_operation_log (
     KEY idx_log_user (user_id),
     KEY idx_log_success (success),
     KEY idx_log_create (create_time)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '系统操作日志表';
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '系统操作日志表';
 
 -- --------------------------------------------------
 -- 预置数据（幂等）
@@ -220,9 +240,9 @@ WHERE p.code IN ('user:import', 'user:export');
 INSERT IGNORE INTO sys_role (code, name, description, status, deleted)
 VALUES ('ADMIN', '超级管理员', '系统内置超管，绑定全部权限', 0, 0);
 
--- 4. 超级管理员绑定全部权限
+-- 4. 超级管理员绑定全部权限（仅绑定未逻辑删除的权限）
 INSERT IGNORE INTO sys_role_permission (role_id, permission_id)
-SELECT (SELECT id FROM sys_role WHERE code = 'ADMIN'), id FROM sys_permission;
+SELECT (SELECT id FROM sys_role WHERE code = 'ADMIN'), id FROM sys_permission WHERE deleted = 0;
 
 -- 5. 超级管理员账号（默认密码 admin123，可用 BCryptPasswordEncoder 对目标密码重新生成 hash 后替换）
 INSERT IGNORE INTO sys_user (email, password, nickname, status, deleted)

@@ -102,6 +102,8 @@ qsx@DESKTOP-SUFEJ61:~$ docker run -d --name mysql -p 3306:3306 -v mysql-data:/va
 ```
 
 ### 🚨 导入 SQL 必须指定 utf8mb4 字符集（防止中文乱码）
+`sql/init.sql` 已**自包含建库**（内置 `CREATE DATABASE IF NOT EXISTS QSXManager ... utf8mb4` + `USE` + `SET NAMES utf8mb4`），无需再手工建库，导入一条命令即可完成「建库 + 建表 + 预置数据」全部初始化。注意：该脚本为首次初始化/全量重建用途，会 DROP 重建全部表、清空已有数据。
+
 建表/种子数据文件（如 `sql/init.sql`）是 **UTF-8 无 BOM**。若直接管道给 mysql 客户端而不指定连接字符集，UTF-8 字节会被误按 latin1 解释并双重编码，导致中文存成 mojibake（如「新增用户」变 `æ–°å¢žç”¨æˆ·`），且权限名、角色名、昵称、表/列 COMMENT 全受影响。
 
 **正确导入方式（二选一）：**

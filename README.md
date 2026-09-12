@@ -216,18 +216,26 @@ QSXManager
 ## 六、快速开始
 
 ### 环境要求
-- JDK 21
-- Maven 3.9+
-- MySQL 8.x
+
+| 组件 | 要求 | 说明 |
+|------|------|------|
+| JDK | 21 | |
+| Maven | 3.9+ | |
+| MySQL | 8.x Docker 容器，`localhost:3306`，`root/123456`，数据卷持久化 | 建表脚本见 `sql/init.sql` |
+| Redis | 7.4.x Docker 容器，`localhost:6379`（无密码） | RBAC 权限缓存；异常自动降级为实时查库，非启动硬依赖 |
+
+> Docker 组件启动命令见 `docs/dev-env/组件依赖README.md`。
 
 ### 1. 准备数据库
-创建数据库并执行建表脚本（含 RBAC 四表与预置数据）：
 
-```sql
-CREATE DATABASE QSXManager CHARACTER SET utf8mb4;
-USE QSXManager;
-SOURCE sql/init.sql;
+`sql/init.sql` 为**自包含初始化脚本**（自动建库 + 建 6 张表 + 预置 RBAC 数据与超管账号），为首次初始化/全量重建用途，会清空已有数据。Docker 方式执行（务必带 utf8mb4 参数，防止中文乱码）：
+
+```bash
+docker cp sql/init.sql mysql:/tmp/init.sql
+docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 < /tmp/init.sql"
 ```
+
+> 等价 mysql 客户端方式：`mysql --default-character-set=utf8mb4 -uroot -p123456 < sql/init.sql`（脚本内已声明会话字符集，双保险）。
 
 ### 2. 配置数据源
 编辑 `src/main/resources/application.yml`，设置 `spring.datasource` 与 `jwt.secret`（正式环境务必替换 JWT 密钥）。
