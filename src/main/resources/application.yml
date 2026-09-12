@@ -9,6 +9,11 @@ spring:
     url: jdbc:mysql://localhost:3306/QSXManager?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: root
     password: "123456"
+  data:
+    redis:
+      # 本地 Redis 容器（redis:7.4.9，无密码，见 docs/dev-env/组件依赖README.md）
+      host: localhost
+      port: 6379
   servlet:
     multipart:
       # Excel 导入上传大小限制
@@ -46,6 +51,14 @@ jwt:
   header: Authorization
   # Token 前缀
   prefix: "Bearer "
+
+# RBAC 权限缓存配置（Redis）
+qsx:
+  rbac-cache:
+    # 总开关：false 时退化为实时查库（降级/特殊环境用）
+    enabled: true
+    # 缓存兜底 TTL（主动失效优先，TTL 仅兜底）
+    ttl: 30m
 
 # 打印启动信息
 logging:

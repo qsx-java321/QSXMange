@@ -69,6 +69,12 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Redis（RBAC 权限缓存，版本由 Boot parent 管理） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <!-- Excel 导入导出（EasyExcel，SAX 流式读写，POI 5.2.5） -->
         <dependency>
             <groupId>com.alibaba</groupId>

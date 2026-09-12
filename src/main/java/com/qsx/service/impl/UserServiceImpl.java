@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.PageResult;
 import com.qsx.common.result.ResultCode;
+import com.qsx.config.event.PermissionCacheEvictEvent;
 import com.qsx.domain.entity.Role;
 import com.qsx.domain.entity.User;
 import com.qsx.domain.entity.UserRole;
@@ -16,8 +17,10 @@ import com.qsx.web.dto.query.UserQuery;
 import com.qsx.web.dto.request.UserCreateRequest;
 import com.qsx.web.dto.request.UserUpdateRequest;
 import com.qsx.web.vo.UserVO;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -36,15 +39,18 @@ public class UserServiceImpl implements UserService {
     private final PasswordEncoder passwordEncoder;
     private final UserRoleMapper userRoleMapper;
     private final RoleMapper roleMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     public UserServiceImpl(UserMapper userMapper,
                            PasswordEncoder passwordEncoder,
                            UserRoleMapper userRoleMapper,
-                           RoleMapper roleMapper) {
+                           RoleMapper roleMapper,
+                           ApplicationEventPublisher eventPublisher) {
         this.userMapper = userMapper;
         this.passwordEncoder = passwordEncoder;
         this.userRoleMapper = userRoleMapper;
         this.roleMapper = roleMapper;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
@@ -109,6 +115,7 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
         User user = userMapper.selectById(id);
         if (user == null) {
@@ -123,9 +130,13 @@ public class UserServiceImpl implements UserService {
 
         // 逻辑删除（deleted -> 1）
         userMapper.deleteById(id);
+
+        // 事务提交后失效该用户权限缓存
+        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.USER, id));
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void assignRoles(Long userId, List<Long> roleIds) {
         // 用户存在性校验
         if (userMapper.selectById(userId) == null) {
@@ -155,6 +166,9 @@ public class UserServiceImpl implements UserService {
                     .collect(Collectors.toList());
             userRoleMapper.insertBatch(list);
         }
+
+        // 事务提交后失效该用户权限缓存
+        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.USER, userId));
     }
 
     @Override

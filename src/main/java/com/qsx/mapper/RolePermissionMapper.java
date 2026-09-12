@@ -5,6 +5,7 @@ import com.qsx.domain.entity.RolePermission;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 
 import java.util.List;
 
@@ -24,4 +25,10 @@ public interface RolePermissionMapper extends BaseMapper<RolePermission> {
             "</foreach>" +
             "</script>")
     int insertBatch(@Param("list") List<RolePermission> list);
+
+    /**
+     * 查询持有指定权限的全部角色 ID（权限缓存失效用）
+     */
+    @Select("SELECT DISTINCT role_id FROM sys_role_permission WHERE permission_id = #{permissionId}")
+    List<Long> selectRoleIdsByPermissionId(@Param("permissionId") Long permissionId);
 }

@@ -5,19 +5,22 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qsx.domain.entity.Role;
 import com.qsx.domain.entity.User;
-import com.qsx.domain.entity.UserRole;
 import com.qsx.mapper.RoleMapper;
 import com.qsx.mapper.UserMapper;
 import com.qsx.mapper.UserRoleMapper;
+import com.qsx.service.UserService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -49,17 +52,42 @@ public abstract class BaseIntegrationTest {
     @Autowired
     protected RoleMapper roleMapper;
 
+    @Autowired
+    protected StringRedisTemplate stringRedisTemplate;
+
+    @Autowired
+    protected UserService userService;
+
+    /** RBAC 权限缓存 key 前缀（与 PermissionCacheServiceImpl 保持一致） */
+    private static final String RBAC_CACHE_KEY_PREFIX = "qsx:auth:perm:";
+
     @BeforeEach
     void cleanDatabase() {
         // 清空用户表与用户-角色关联，保证用例隔离（角色/权限为常驻种子数据，不清理）
         userRoleMapper.delete(null);
         userMapper.delete(null);
+        cleanPermissionCache();
     }
 
     @AfterEach
     void tearDown() {
         userRoleMapper.delete(null);
         userMapper.delete(null);
+        cleanPermissionCache();
+    }
+
+    /**
+     * 清理 RBAC 权限缓存 key（避免跨用例污染；Redis 不可用时静默跳过）
+     */
+    private void cleanPermissionCache() {
+        try {
+            Set<String> keys = stringRedisTemplate.keys(RBAC_CACHE_KEY_PREFIX + "*");
+            if (keys != null && !keys.isEmpty()) {
+                stringRedisTemplate.delete(keys);
+            }
+        } catch (Exception e) {
+            // Redis 不可用则忽略（业务侧已降级为实时查库）
+        }
     }
 
     /**
@@ -121,16 +149,14 @@ public abstract class BaseIntegrationTest {
 
     /**
      * 构造一个绑定 ADMIN 超管角色的用户并返回其 token
+     * （走真实业务链路 assignRoles，触发权限缓存失效，保证该用户权限即时生效）
      */
     protected String adminToken() throws Exception {
         String email = uniqueEmail("admin");
         String token = registerAndLoginGetToken(email, "abc123");
         Long userId = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getEmail, email)).getId();
-        UserRole ur = new UserRole();
-        ur.setUserId(userId);
-        ur.setRoleId(adminRoleId());
-        userRoleMapper.insert(ur);
+        userService.assignRoles(userId, List.of(adminRoleId()));
         return token;
     }
 }

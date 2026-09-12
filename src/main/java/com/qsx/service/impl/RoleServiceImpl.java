@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.PageResult;
 import com.qsx.common.result.ResultCode;
+import com.qsx.config.event.PermissionCacheEvictEvent;
 import com.qsx.domain.entity.Role;
 import com.qsx.domain.entity.RolePermission;
 import com.qsx.domain.entity.UserRole;
@@ -17,7 +18,9 @@ import com.qsx.web.dto.query.RoleQuery;
 import com.qsx.web.dto.request.RoleCreateRequest;
 import com.qsx.web.dto.request.RoleUpdateRequest;
 import com.qsx.web.vo.RoleVO;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -37,15 +40,18 @@ public class RoleServiceImpl implements RoleService {
     private final RolePermissionMapper rolePermissionMapper;
     private final UserRoleMapper userRoleMapper;
     private final PermissionMapper permissionMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     public RoleServiceImpl(RoleMapper roleMapper,
                            RolePermissionMapper rolePermissionMapper,
                            UserRoleMapper userRoleMapper,
-                           PermissionMapper permissionMapper) {
+                           PermissionMapper permissionMapper,
+                           ApplicationEventPublisher eventPublisher) {
         this.roleMapper = roleMapper;
         this.rolePermissionMapper = rolePermissionMapper;
         this.userRoleMapper = userRoleMapper;
         this.permissionMapper = permissionMapper;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
@@ -86,6 +92,7 @@ public class RoleServiceImpl implements RoleService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public RoleVO update(Long id, RoleUpdateRequest request) {
         Role role = getRole(id);
         // 编码被修改时校验唯一性（排除自身）
@@ -100,10 +107,14 @@ public class RoleServiceImpl implements RoleService {
         role.setDescription(request.getDescription());
         role.setStatus(request.getStatus());
         roleMapper.updateById(role);
+
+        // 角色信息变更（尤其编码影响 ROLE_xxx authority），事务提交后失效其下全部用户缓存
+        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.ROLE, id));
         return RoleVO.from(role);
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
         Role role = getRole(id);
         // 内置超管角色禁止删除，避免误删全部权限导致失控
@@ -116,9 +127,13 @@ public class RoleServiceImpl implements RoleService {
         userRoleMapper.delete(
                 new LambdaQueryWrapper<UserRole>().eq(UserRole::getRoleId, id));
         roleMapper.deleteById(id);
+
+        // 事务提交后失效该角色下全部用户缓存
+        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.ROLE, id));
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void assignPermissions(Long roleId, List<Long> permissionIds) {
         getRole(roleId);
         // 校验目标权限均存在
@@ -146,6 +161,9 @@ public class RoleServiceImpl implements RoleService {
                     .collect(Collectors.toList());
             rolePermissionMapper.insertBatch(list);
         }
+
+        // 事务提交后失效该角色下全部用户缓存
+        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.ROLE, roleId));
     }
 
     @Override

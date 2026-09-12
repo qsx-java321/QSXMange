@@ -3,10 +3,11 @@ package com.qsx.service.impl;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.ResultCode;
 import com.qsx.domain.entity.User;
-import com.qsx.mapper.UserMapper;
+import com.qsx.security.model.PermissionCacheData;
 import com.qsx.security.token.JwtTokenProvider;
 import com.qsx.security.util.SecurityUtils;
 import com.qsx.service.AuthService;
+import com.qsx.service.PermissionCacheService;
 import com.qsx.service.UserService;
 import com.qsx.web.dto.request.ChangePasswordRequest;
 import com.qsx.web.dto.request.LoginRequest;
@@ -31,18 +32,18 @@ public class AuthServiceImpl implements AuthService {
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JwtTokenProvider jwtTokenProvider;
-    private final UserMapper userMapper;
+    private final PermissionCacheService permissionCacheService;
 
     public AuthServiceImpl(UserService userService,
                            PasswordEncoder passwordEncoder,
                            AuthenticationManager authenticationManager,
                            JwtTokenProvider jwtTokenProvider,
-                           UserMapper userMapper) {
+                           PermissionCacheService permissionCacheService) {
         this.userService = userService;
         this.passwordEncoder = passwordEncoder;
         this.authenticationManager = authenticationManager;
         this.jwtTokenProvider = jwtTokenProvider;
-        this.userMapper = userMapper;
+        this.permissionCacheService = permissionCacheService;
     }
 
     @Override
@@ -75,13 +76,16 @@ public class AuthServiceImpl implements AuthService {
         User user = userService.getByEmail(request.getEmail());
         String token = jwtTokenProvider.generateToken(user.getId(), user.getEmail());
 
+        // 角色码/权限码从缓存读取（authenticate 已回填，此处直接命中）
+        PermissionCacheData data = permissionCacheService.load(user.getId());
+
         LoginVO vo = new LoginVO();
         vo.setToken(token);
         vo.setUserId(user.getId());
         vo.setEmail(user.getEmail());
         vo.setNickname(user.getNickname());
-        vo.setRoles(userMapper.selectRoleCodes(user.getId()));
-        vo.setPermissions(userMapper.selectPermissionCodes(user.getId()));
+        vo.setRoles(data.getRoles());
+        vo.setPermissions(data.getPermissions());
         return vo;
     }
 

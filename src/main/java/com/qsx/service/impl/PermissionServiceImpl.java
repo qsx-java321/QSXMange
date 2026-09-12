@@ -6,19 +6,23 @@ import com.qsx.common.constant.PermissionConstants;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.PageResult;
 import com.qsx.common.result.ResultCode;
+import com.qsx.config.event.PermissionCacheEvictEvent;
 import com.qsx.domain.entity.Permission;
 import com.qsx.domain.entity.RolePermission;
 import com.qsx.domain.entity.User;
 import com.qsx.mapper.PermissionMapper;
 import com.qsx.mapper.RolePermissionMapper;
-import com.qsx.mapper.UserMapper;
+import com.qsx.security.model.PermissionCacheData;
 import com.qsx.security.util.SecurityUtils;
+import com.qsx.service.PermissionCacheService;
 import com.qsx.service.PermissionService;
 import com.qsx.web.dto.query.PermissionQuery;
 import com.qsx.web.dto.request.MenuCreateRequest;
 import com.qsx.web.dto.request.MenuUpdateRequest;
 import com.qsx.web.vo.PermissionVO;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.Collections;
@@ -39,14 +43,17 @@ public class PermissionServiceImpl implements PermissionService {
 
     private final PermissionMapper permissionMapper;
     private final RolePermissionMapper rolePermissionMapper;
-    private final UserMapper userMapper;
+    private final PermissionCacheService permissionCacheService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public PermissionServiceImpl(PermissionMapper permissionMapper,
                                  RolePermissionMapper rolePermissionMapper,
-                                 UserMapper userMapper) {
+                                 PermissionCacheService permissionCacheService,
+                                 ApplicationEventPublisher eventPublisher) {
         this.permissionMapper = permissionMapper;
         this.rolePermissionMapper = rolePermissionMapper;
-        this.userMapper = userMapper;
+        this.permissionCacheService = permissionCacheService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
@@ -131,6 +138,7 @@ public class PermissionServiceImpl implements PermissionService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
         getPermission(id);
         // 存在子节点禁止删除，防止孤立子树
@@ -143,12 +151,17 @@ public class PermissionServiceImpl implements PermissionService {
         rolePermissionMapper.delete(
                 new LambdaQueryWrapper<RolePermission>().eq(RolePermission::getPermissionId, id));
         permissionMapper.deleteById(id);
+
+        // 事务提交后失效持有该权限的全部用户缓存（菜单/权限删除影响其下所有持有者）
+        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.PERMISSION, id));
     }
 
     @Override
     public List<PermissionVO> getUserMenuTree() {
         User current = SecurityUtils.getCurrentUser();
-        List<String> ownedCodes = userMapper.selectPermissionCodes(current.getId());
+        // 权限码从缓存读取（JWT 过滤器已回填，此处直接命中）
+        PermissionCacheData data = permissionCacheService.load(current.getId());
+        List<String> ownedCodes = data.getPermissions();
         if (ownedCodes.isEmpty()) {
             return Collections.emptyList();
         }

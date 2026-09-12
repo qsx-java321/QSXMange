@@ -2,7 +2,7 @@
 
 > 单体单模块、前后端分离的中小型后台管理系统
 
-当前已实现「认证中心（邮箱+密码+JWT）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」「操作日志（AOP 访问审计）」与「用户 Excel 批量导入导出」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。Redis 缓存、邮箱验证码等将在后续阶段接入。
+当前已实现「认证中心（邮箱+密码+JWT）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」「操作日志（AOP 访问审计）」「用户 Excel 批量导入导出」与「RBAC 权限缓存（Redis）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。邮箱验证码、Token 黑名单等将在后续阶段接入。
 
 ---
 
@@ -14,13 +14,14 @@
 | 框架 | Spring Boot 3.5.16 |
 | 持久层 | MyBatis-Plus 3.5.17（含分页插件、逻辑删除） |
 | 安全框架 | Spring Security + JWT（jjwt 0.12.6，HS384）+ `@PreAuthorize` 方法级鉴权 |
+| 权限缓存 | Redis 7.4.x（`spring-boot-starter-data-redis`，用户权限码缓存，未命中回源 MySQL 并回填） |
 | 切面 | Spring AOP（`spring-boot-starter-aop`）操作日志切面 + `@Async` 异步落库 |
 | Excel | EasyExcel 4.0.3（SAX 流式读写，导入解析上传流 / 导出直出响应流，不落盘） |
 | 数据库 | MySQL 8.x |
 | 密码加密 | BCrypt |
 | 接口风格 | RESTful，统一 `Result` / `PageResult` 返回 |
 
-> 说明：采用**纯 JWT 无状态认证**，暂未引入 Redis（登出依靠客户端清除 Token，角色/权限每请求实时查库，变更即时生效）。
+> 说明：采用**纯 JWT 无状态认证**。角色/权限码经 **Redis 缓存**（key=`qsx:auth:perm:{userId}`，仅缓存权限码，用户行/密码/状态仍实时查库），未命中回源 MySQL 并回填；权限/角色/用户变更在**事务提交后失效**相关缓存（`@TransactionalEventListener` AFTER_COMMIT），变更即时生效。登出依靠客户端清除 Token，Token 黑名单将在后续阶段接入。Redis 异常自动降级为实时查库，可用 `qsx.rbac-cache.enabled=false` 一键关闭缓存。
 
 ## 二、项目结构
 
@@ -40,9 +41,10 @@ QSXManager
 │   │   │   │   ├── exception/               # BusinessException
 │   │   │   │   └── constant/                # SecurityConstants / PermissionConstants
 │   │   │   ├── config/                      # 全局配置
-    │   │   │   │   ├── MybatisPlusConfig.java   # 分页插件 + 字段自动填充
-    │   │   │   │   ├── AsyncConfig.java         # 异步线程池（操作日志落库）
-    │   │   │   │   └── properties/JwtProperties.java  # JWT 配置属性
+	    │   │   │   │   ├── MybatisPlusConfig.java   # 分页插件 + 字段自动填充
+	    │   │   │   │   ├── AsyncConfig.java         # 异步线程池（操作日志落库）
+	    │   │   │   │   ├── event/                   # 权限缓存失效事件 + AFTER_COMMIT 监听器
+	    │   │   │   │   └── properties/              # JwtProperties / RbacCacheProperties
     │   │   │   ├── aspect/                      # AOP 切面
     │   │   │   │   └── OperationLogAspect.java  # 操作日志：Controller 全量审计 + @Async 落库
 │   │   │   ├── security/                    # Spring Security + JWT 认证授权
@@ -58,10 +60,11 @@ QSXManager
 │   │   │   │   └── base/BaseEntity.java     # 通用字段（含逻辑删除）
 │   │   │   ├── mapper/                      # MyBatis-Plus Mapper（含角色/权限联表查询）
 │   │   │   ├── service/                     # 业务接口 + impl
-│   │   │   │   ├── AuthService.java         # 认证中心
-│   │   │   │   ├── UserService.java         # 用户管理（含分配角色）
-│   │   │   │   ├── RoleService.java         # 角色管理（含分配权限）
-│   │   │   │   └── PermissionService.java   # 菜单+权限管理（含树形）
+	│   │   │   │   ├── AuthService.java         # 认证中心
+	│   │   │   │   ├── UserService.java         # 用户管理（含分配角色）
+	│   │   │   │   ├── RoleService.java         # 角色管理（含分配权限）
+	│   │   │   │   ├── PermissionService.java   # 菜单+权限管理（含树形）
+	│   │   │   │   └── PermissionCacheService.java  # RBAC 权限缓存（Redis 优先 + MySQL 回源）
 │   │   │   └── web/                         # Web 接入层
 │   │   │       ├── advice/GlobalExceptionHandler.java
 │   │   │       ├── controller/
@@ -175,7 +178,7 @@ QSXManager
 ### 鉴权说明
 - `/auth/register`、`/auth/login` 匿名放行；
 - 其余接口需携带请求头 `Authorization: Bearer <token>`；
-- URL 级 `authenticated()` + 方法级 `@PreAuthorize` 权限码校验（双保险），权限码随请求实时从数据库加载；
+- URL 级 `authenticated()` + 方法级 `@PreAuthorize` 权限码校验（双保险），权限码经 Redis 缓存加载（未命中回源 MySQL，权限变更事务提交后即时失效）；
 - 未登录返回 401，无权限返回 403，参数校验失败返回 400，均统一为 JSON 格式。
 
 ## 五、统一返回格式
@@ -252,11 +255,12 @@ curl -X POST http://localhost:8080/auth/login \
 mvn clean test
 ```
 
-测试复用本地 MySQL 的 QSXManager 库，执行前需保证库可连接和表结构存在。
+测试复用本地 MySQL 的 QSXManager 库与本地 Redis，执行前需保证两者可连接（Redis 不可用时业务自动降级为实时查库，仅缓存专项测试会受影响）。
 
 ## 七、后续规划
 
-- [ ] Redis 缓存（Token 黑名单、权限缓存）
+- [x] RBAC 权限缓存（Redis，含失效与降级）
+- [ ] Token 黑名单（登出失效）
 - [ ] 邮箱验证码注册
 - [ ] 登录日志（操作日志已实现）
 - [ ] 前端管理界面（对接菜单树动态路由）
