@@ -49,7 +49,11 @@ public enum ResultCode {
     REFRESH_TOKEN_INVALID(1019, "刷新令牌无效或已过期"),
     ADMIN_USER_CANNOT_DISABLE(1020, "内置超管用户不可禁用"),
     ADMIN_USER_CANNOT_KICK(1021, "内置超管用户不可强制登出"),
-    CANNOT_OPERATE_SELF(1022, "不允许对自己执行该操作");
+    CANNOT_OPERATE_SELF(1022, "不允许对自己执行该操作"),
+
+    // 标识不可变 (1023 起)：code 是鉴权与菜单过滤的依据，改错会立刻锁死对应接口
+    PERMISSION_CODE_IMMUTABLE(1023, "菜单或权限标识创建后不可修改，请新建并重新绑定"),
+    ROLE_CODE_IMMUTABLE(1024, "角色编码创建后不可修改，请新建并重新绑定");
 
     private final int code;
     private final String message;

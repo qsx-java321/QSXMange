@@ -122,13 +122,15 @@ public class PermissionServiceImpl implements PermissionService {
     @Transactional(rollbackFor = Exception.class)
     public PermissionVO update(Long id, MenuUpdateRequest request) {
         Permission permission = getPermission(id);
-        // 先反查持有者：标识（code）变更会改变用户权限码集合，须失效其缓存；
+        // 先反查持有者：菜单名/可见性等变更会影响菜单树，须在改动前取快照并失效其缓存；
         // 反查须在改动关联前完成，且本方法必须有事务，否则 AFTER_COMMIT 监听器不会触发
         Set<Long> affectedUserIds = new HashSet<>(userRoleMapper.selectUserIdsByPermissionId(id));
-        // 标识唯一性校验（排除自身）
-        Permission existing = selectByCode(request.getCode());
-        if (existing != null && !existing.getId().equals(id)) {
-            throw new BusinessException(ResultCode.PERMISSION_CODE_EXISTS);
+
+        // 标识（code）创建后不可修改：它既是 @PreAuthorize 的鉴权依据，也是菜单树的过滤依据。
+        // 改错一个系统码（如 menu:update）会让对应接口全部失配——**包括把它改回来所需的那个接口**，
+        // 只能靠改库恢复。需要改名请新建一条并重新绑定角色
+        if (!request.getCode().equals(permission.getCode())) {
+            throw new BusinessException(ResultCode.PERMISSION_CODE_IMMUTABLE);
         }
         validateParent(request.getParentId(), id);
 

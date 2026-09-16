@@ -111,7 +111,7 @@ class RbacCacheTest extends BaseIntegrationTest {
 
     /** 测试夹具：用户 → 测试角色 → 测试权限 的持有链路 */
     private record Holder(String adminToken, String userToken, Long userId,
-                          long roleId, long permissionId, String permissionCode) {
+                          long roleId, String roleCode, long permissionId, String permissionCode) {
     }
 
     private Holder prepareHolder(String permissionCode) throws Exception {
@@ -121,11 +121,12 @@ class RbacCacheTest extends BaseIntegrationTest {
         Long userId = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getEmail, email)).getId();
 
-        long roleId = createRole(adminToken, TEST_ROLE_PREFIX + uniqueSuffix());
+        String roleCode = TEST_ROLE_PREFIX + uniqueSuffix();
+        long roleId = createRole(adminToken, roleCode);
         long permissionId = createPermissionNode(adminToken, permissionCode);
         assignPermissionToRole(adminToken, roleId, permissionId);
         assignRoleToUser(adminToken, userId, roleId);
-        return new Holder(adminToken, userToken, userId, roleId, permissionId, permissionCode);
+        return new Holder(adminToken, userToken, userId, roleId, roleCode, permissionId, permissionCode);
     }
 
     // ---------- 缓存回填与即时生效 ----------
@@ -214,25 +215,46 @@ class RbacCacheTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("修改权限标识：持有者缓存立即失效并回源到新标识")
-    void updatePermissionCode_evictsHoldersCache() throws Exception {
-        String oldCode = TEST_PERM_PREFIX + uniqueSuffix();
-        Holder holder = prepareHolder(oldCode);
+    @DisplayName("修改权限标识被拒：code 创建后不可变（改名会让 @PreAuthorize 全线失配）")
+    void updatePermissionCode_rejected() throws Exception {
+        String code = TEST_PERM_PREFIX + uniqueSuffix();
+        Holder holder = prepareHolder(code);
 
-        assertThat(reloadCachedPermissions(holder.userToken(), holder.userId())).contains(oldCode);
-
-        String newCode = TEST_PERM_PREFIX + uniqueSuffix();
-        mockMvc.perform(put("/api/menus/" + holder.permissionId())
+        MvcResult result = mockMvc.perform(put("/api/menus/" + holder.permissionId())
                         .header("Authorization", bearerHeader(holder.adminToken()))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"code\":\"" + newCode + "\",\"name\":\"缓存测试权限\",\"type\":\"PERMISSION\"," +
-                                "\"parentId\":0,\"visible\":1,\"sort\":99}"))
-                .andExpect(status().isOk());
+                        .content("{\"code\":\"" + TEST_PERM_PREFIX + uniqueSuffix() + "\",\"name\":\"试图改名\"," +
+                                "\"type\":\"PERMISSION\",\"parentId\":0,\"visible\":1,\"sort\":99}"))
+                .andExpect(status().isOk())
+                .andReturn();
 
-        // 旧实现无失效事件，key 仍残留旧标识
-        assertThat(stringRedisTemplate.hasKey(cacheKey(holder.userId()))).isFalse();
+        assertThat(objectMapper.readTree(result.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1023);
+
+        // 标识未变，持有者权限不受影响
+        assertThat(reloadCachedPermissions(holder.userToken(), holder.userId())).contains(code);
+    }
+
+    @Test
+    @DisplayName("停用角色：持有者立即失去该角色带来的权限（权限查询过滤 status）")
+    void disableRole_revokesPermissions() throws Exception {
+        String permissionCode = TEST_PERM_PREFIX + uniqueSuffix();
+        Holder holder = prepareHolder(permissionCode);
+        assertThat(reloadCachedPermissions(holder.userToken(), holder.userId())).contains(permissionCode);
+
+        // 停用角色（code 不可变，只改 status）
+        MvcResult result = mockMvc.perform(put("/api/roles/" + holder.roleId())
+                        .header("Authorization", bearerHeader(holder.adminToken()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"" + holder.roleCode() + "\",\"name\":\"缓存测试角色\",\"status\":1}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(result.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(200);
+
+        // 停用即不再授予权限：回源查询必须过滤 sys_role.status，
+        // 否则「停用」只清缓存、结果不变，管理端的停用形同虚设
         assertThat(reloadCachedPermissions(holder.userToken(), holder.userId()))
-                .contains(newCode)
-                .doesNotContain(oldCode);
+                .doesNotContain(permissionCode);
     }
 }

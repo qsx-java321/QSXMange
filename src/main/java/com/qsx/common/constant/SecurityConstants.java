@@ -22,4 +22,11 @@ public final class SecurityConstants {
 
     /** 刷新令牌接口（匿名放行） */
     public static final String REFRESH_URL = "/auth/refresh";
+
+    /**
+     * 请求属性：认证链路因**基础设施异常**（如 Redis 不可达）而判为未认证。
+     * 此类 401 不写操作日志——故障期间 100% 请求都会 401，
+     * 若逐条落库会形成写库风暴，把 Redis 的局部故障放大成全站不可用。
+     */
+    public static final String AUTH_INFRA_ERROR_ATTR = "qsx.auth.infraError";
 }

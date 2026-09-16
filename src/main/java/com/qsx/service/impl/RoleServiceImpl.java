@@ -97,14 +97,14 @@ public class RoleServiceImpl implements RoleService {
     @Transactional(rollbackFor = Exception.class)
     public RoleVO update(Long id, RoleUpdateRequest request) {
         Role role = getRole(id);
-        // 先反查该角色下用户（编码变更影响其 ROLE_xxx authority），供事务提交后失效
+        // 先反查该角色下用户（状态/名称变更需失效其缓存），供事务提交后失效
         Set<Long> affectedUserIds = new HashSet<>(userRoleMapper.selectUserIdsByRoleId(id));
-        // 编码被修改时校验唯一性（排除自身）
+
+        // 角色编码创建后不可修改：它是 RBAC 权威标识（ROLE_xxx），且内置超管保护依赖
+        // RoleConstants.ADMIN 按编码匹配——改名会让「超管不可踢/不可禁用」的保护静默失配，
+        // 等于给了一条把超管权限保护绕过去的路径。需要改名请新建角色并重新分配
         if (!request.getCode().equals(role.getCode())) {
-            Role existing = selectByCode(request.getCode());
-            if (existing != null && !existing.getId().equals(id)) {
-                throw new BusinessException(ResultCode.ROLE_CODE_EXISTS);
-            }
+            throw new BusinessException(ResultCode.ROLE_CODE_IMMUTABLE);
         }
         role.setCode(request.getCode());
         role.setName(request.getName());

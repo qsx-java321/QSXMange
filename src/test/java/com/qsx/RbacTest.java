@@ -194,6 +194,46 @@ class RbacTest extends BaseIntegrationTest {
         assertThat(rels).hasSize(2);
     }
 
+    // ---------- 标识不可变 ----------
+
+    @Test
+    @DisplayName("修改角色编码被拒：编码创建后不可变（改名会让内置超管保护失配）")
+    void updateRoleCode_rejected() throws Exception {
+        String admin = adminToken();
+        String code = uniqueRoleCode();
+        long roleId = roleId(createRole(admin, code));
+
+        MvcResult result = mockMvc.perform(put("/api/roles/" + roleId)
+                        .header("Authorization", bearerHeader(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"" + code + "X\",\"name\":\"试图改编码\",\"status\":0}"))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        // 角色编码是 RBAC 权威标识，且内置超管保护按 RoleConstants.ADMIN 匹配编码：
+        // 允许改名 = 给出一条绕过「超管不可踢/不可禁用」的路径
+        assertThat(objectMapper.readTree(result.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1024);
+    }
+
+    @Test
+    @DisplayName("角色非法 status（非 0/1）被参数校验拒绝")
+    void updateRole_invalidStatus_rejected() throws Exception {
+        String admin = adminToken();
+        String code = uniqueRoleCode();
+        long roleId = roleId(createRole(admin, code));
+
+        MvcResult result = mockMvc.perform(put("/api/roles/" + roleId)
+                        .header("Authorization", bearerHeader(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"" + code + "\",\"name\":\"测试角色\",\"status\":2}"))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        assertThat(objectMapper.readTree(result.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(400);
+    }
+
     private String uniqueRoleCode() {
         return "ROLE_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8);
     }

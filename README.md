@@ -32,6 +32,12 @@
 >
 > 角色/权限码经 **Redis 缓存**（key=`qsx:auth:perm:{userId}`，仅缓存权限码，用户行/密码/状态仍实时查库），未命中回源 MySQL 并回填；权限/角色/用户变更在**事务提交后失效**相关缓存（`@TransactionalEventListener` AFTER_COMMIT），变更即时生效。
 >
+> **停用角色即时回收权限**：权限查询按 `r.status = 0` 过滤，把角色置为停用（`status=1`）后其持有者立刻失去该角色带来的全部权限码（`listAll` 等下拉同样只列启用角色）。
+>
+> **标识（code）创建后不可修改**：权限/菜单标识与角色编码都是鉴权依据（`@PreAuthorize`、菜单过滤、内置超管保护按 `ADMIN` 匹配编码），改错会让对应接口全线失配、**连改回来所需的接口也一起锁死**，故更新接口对变更 code 直接返回 1023/1024。需要改名请新建一条并重新绑定。
+>
+> **已知有界陈旧**：缓存未命中的回填与「事务提交后失效」之间存在极窄竞态（毫秒级）——一个在提交前读到旧数据的在途请求，仍可能把旧权限写回缓存，最长残留一个 TTL（`qsx.rbac-cache.ttl`，默认 30 分钟）。后台管理系统并发极低，此处选择以 TTL 兜底而非引入版本号（若需严格保证，可为缓存键加版本号并做回填 CAS）。
+>
 > **redis 异常策略分级**：会话链路 **fail-closed**（令牌是随机串，Redis 之外无法确定身份，宁可拒绝认证也不错误放行，即 Redis 故障 = 全员 401）；权限缓存 **fail-open**（降级查库，业务可用性优先），可用 `qsx.rbac-cache.enabled=false` 关闭权限缓存。
 
 ## 二、项目结构
@@ -162,7 +168,7 @@ QSXManager
 | 角色列表 | `GET /api/roles/all` | `role:page` | 仅启用角色，用于下拉选择 |
 | 角色详情 | `GET /api/roles/{id}` | `role:get` | 含已绑定权限 ID 列表 |
 | 新增角色 | `POST /api/roles` | `role:create` | 编码唯一性校验 |
-| 修改角色 | `PUT /api/roles/{id}` | `role:update` | 编码唯一性校验（排除自身） |
+| 修改角色 | `PUT /api/roles/{id}` | `role:update` | 可改名称/描述/状态；**编码创建后不可修改**（1024）；**停用即回收该角色授予的权限** |
 | 删除角色 | `DELETE /api/roles/{id}` | `role:delete` | 内置 `ADMIN` 禁止删除；先清关联再逻辑删除 |
 | 分配权限 | `PUT /api/roles/{id}/permissions` | `role:assign` | 整表替换角色权限 |
 
@@ -185,7 +191,7 @@ QSXManager
 | 菜单树 | `GET /api/menus/tree` | `menu:tree` | 全量菜单+按钮权限树（管理端） |
 | 我的菜单 | `GET /api/menus/current` | 登录即可 | 当前用户菜单树（按权限过滤+补祖先，供前端动态路由） |
 | 新增菜单 | `POST /api/menus` | `menu:create` | 支持菜单/按钮权限，标识唯一性校验 |
-| 修改菜单 | `PUT /api/menus/{id}` | `menu:update` | 含防环校验（父节点不能指向自身或子孙） |
+| 修改菜单 | `PUT /api/menus/{id}` | `menu:update` | 含防环校验（父节点不能指向自身或子孙）；**标识创建后不可修改**（1023） |
 | 删除菜单 | `DELETE /api/menus/{id}` | `menu:delete` | 存在子节点禁止删除；删除时清理角色-权限关联 |
 
 ### 操作日志（需登录 + 权限）
@@ -241,6 +247,8 @@ QSXManager
 | 1020 | 内置超管用户不可禁用 |
 | 1021 | 内置超管用户不可强制登出 |
 | 1022 | 不允许对自己执行该操作 |
+| 1023 | 菜单或权限标识创建后不可修改 |
+| 1024 | 角色编码创建后不可修改 |
 
 ## 六、快速开始
 

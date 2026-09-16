@@ -73,8 +73,11 @@ public class TokenAuthenticationFilter extends OncePerRequestFilter {
                 log.debug("令牌对应的用户不存在，按未认证处理");
             } catch (Exception e) {
                 // 基础设施异常（典型是 Redis 不可达）：fail-closed 拒绝认证。
-                // 必须 ERROR 留痕——否则线上 Redis 故障与「令牌集体过期」在日志里完全无法区分
+                // 必须 ERROR 留痕——否则线上 Redis 故障与「令牌集体过期」在日志里完全无法区分。
+                // 同时打标记，让 401 处理器跳过操作日志落库（故障期每条请求都 401，逐条写库会
+                // 把 Redis 的局部故障放大成数据库写风暴）
                 log.error("认证链路异常（Redis 不可达？），本次请求按未认证处理", e);
+                request.setAttribute(SecurityConstants.AUTH_INFRA_ERROR_ATTR, Boolean.TRUE);
                 SecurityContextHolder.clearContext();
             }
         }

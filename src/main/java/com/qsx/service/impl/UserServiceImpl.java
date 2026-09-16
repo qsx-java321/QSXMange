@@ -25,6 +25,8 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -39,6 +41,36 @@ import java.util.stream.Collectors;
 public class UserServiceImpl implements UserService {
 
     private static final String DELETED_EMAIL_SUFFIX_PREFIX = "#deleted_";
+
+    /**
+     * 清理会话；Redis 异常仅告警不阻断主流程（调用方语义优先）
+     */
+    private void removeSessionQuietly(Long userId) {
+        try {
+            authSessionService.remove(userId);
+        } catch (Exception e) {
+            log.warn("清理会话失败, userId={}", userId, e);
+        }
+    }
+
+    /**
+     * 把会话清理推迟到事务提交之后执行（无事务时立即执行）。
+     *
+     * 与权限缓存失效（AFTER_COMMIT 事件）保持同一时机：事务回滚时不应留下
+     * 「用户没被删掉、会话却已被清空」的不一致状态。
+     */
+    private void removeSessionAfterCommit(Long userId) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    removeSessionQuietly(userId);
+                }
+            });
+        } else {
+            removeSessionQuietly(userId);
+        }
+    }
 
     /**
      * 请求是否在禁用账号：<b>非 0 即禁用</b>。
@@ -147,11 +179,7 @@ public class UserServiceImpl implements UserService {
         // 而任何能真正禁用账号的取值都必须清理会话，否则解冻后旧令牌会复活。
         // 仅告警不阻断：禁用语义优先，且每请求查库 isEnabled() 是第二道防线
         if (isDisabling(request.getStatus())) {
-            try {
-                authSessionService.remove(id);
-            } catch (Exception e) {
-                log.warn("禁用用户时清理会话失败, userId={}", id, e);
-            }
+            removeSessionQuietly(id);
         }
         return UserVO.from(user);
     }
@@ -173,12 +201,10 @@ public class UserServiceImpl implements UserService {
         // 逻辑删除（deleted -> 1）
         userMapper.deleteById(id);
 
-        // 同步清理会话（at/rt/session 三键）；Redis 异常仅告警，不阻断删除（删除语义优先）
-        try {
-            authSessionService.remove(id);
-        } catch (Exception e) {
-            log.warn("删除用户时清理会话失败, userId={}", id, e);
-        }
+        // 清理会话（at/rt/session 三键）；Redis 异常仅告警，不阻断删除（删除语义优先）。
+        // 放在事务提交之后执行：与权限缓存失效（AFTER_COMMIT 事件）保持同一时机——
+        // 若在事务内执行，回滚会让「其实没被删除的用户」被登出
+        removeSessionAfterCommit(id);
 
         // 事务提交后失效该用户权限缓存
         eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUser(id));
