@@ -6,7 +6,7 @@
 
   定位: 单体单模块、前后端分离的中小型后台管理系统
 
-  目标: 提供邮箱密码注册登录、JWT认证、完整RBAC权限、用户/角色/权限管理
+  目标: 提供邮箱密码注册登录、令牌认证（Redis 有状态双 token）、完整RBAC权限、用户/角色/权限管理
 
   适合:
 
@@ -44,7 +44,7 @@
 
   缓存: Redis
 
-  认证方式: 邮箱 + 密码 + JWT
+  认证方式: 邮箱 + 密码 + Redis 有状态双 token（access/refresh 均为随机串）
 
   密码加密: BCrypt
 
@@ -104,7 +104,7 @@
 
     - 路径: security
 
-      职责: Spring Security 与 JWT 认证授权
+      职责: Spring Security 与令牌认证授权
 
       子包:
 
@@ -114,7 +114,7 @@
 
         - 路径: filter
 
-          职责: JwtAuthenticationFilter
+          职责: TokenAuthenticationFilter（Redis 反查身份）
 
         - 路径: handler
 
@@ -122,7 +122,7 @@
 
         - 路径: token
 
-          职责: Token 生成、解析、刷新、黑名单
+          职责: 令牌生成（TokenProvider）、会话读写（session 子包）
 
         - 路径: model
 
@@ -286,7 +286,7 @@
 
         - 邮箱 + 密码登录
 
-        - JWT 签发与校验
+        - 令牌签发与校验（Redis 反查身份）
 
         - 获取当前登录用户信息
 
@@ -458,7 +458,7 @@
 
   - 邮箱密码登录
 
-  - 返回 JWT
+  - 返回令牌对（access token + refresh token）
 
   - 获取当前用户信息
 
@@ -504,11 +504,13 @@ RBAC模型:
 
     - Spring Security 管理认证与授权
 
-    - JWT（access token，30 分钟短期）保存登录状态
+    - Redis 为令牌有效性的唯一真相源：access token 与 refresh token 均为 32 字节 SecureRandom 的 hex 随机串，无签名、无载荷、不可解析出用户信息
 
-    - refresh token（32 字节随机串，仅存 SHA-256 哈希于 Redis）承载会话，key=qsx:auth:refresh:{userId}，单端登录、滑动续期 7 天 + 30 天绝对上限
+    - 三键模型：qsx:auth:at:{at} → userId（30 分钟，删除即吊销）；qsx:auth:rt:{rt} → userId（7 天）；qsx:auth:session:{userId} → Hash{accessToken, refreshToken, firstLoginTs}（7 天滑动）
 
-    - Redis 保存权限缓存（qsx:auth:perm:{userId}）、刷新会话；会话链路 Redis 异常 fail-closed（拒绝续期），权限缓存降级回源 MySQL
+    - 签发 / 轮换 / 清理均由 Lua 脚本原子执行；单端登录、滑动续期 7 天 + 30 天绝对上限
+
+    - Redis 保存权限缓存（qsx:auth:perm:{userId}）；会话链路 Redis 异常 fail-closed（拒绝认证），权限缓存 fail-open 降级回源 MySQL
 
     - 方法上使用 PreAuthorize 校验权限标识
 
@@ -532,15 +534,15 @@ RBAC模型:
 
     - Spring Security 进行认证（实时查库，禁用账号 1003）
 
-    - 认证成功后生成 access token（JWT，30 分钟）+ refresh token（写 Redis，覆盖旧会话实现单端登录）
+    - 认证成功后签发双 token（Lua 原子脚本）：清理旧会话的 at/rt → 写会话索引 → 写新 at/rt 键（覆盖旧会话实现单端登录）
 
     - 返回 token、refreshToken、用户信息、角色、权限
 
   请求鉴权:
 
-    - JwtAuthenticationFilter 解析 token，实时查库加载用户并校验 status（禁用即 401）
+    - TokenAuthenticationFilter 取 Bearer 令牌，Redis 反查 userId（查不到即未认证）
 
-    - 校验 token 签名与过期
+    - 按 userId 实时查库加载用户并校验 status（禁用/删除即 401）
 
     - 加载用户权限（Redis 缓存优先）并写入 SecurityContext
 
@@ -548,17 +550,17 @@ RBAC模型:
 
   刷新令牌（access 过期后）:
 
-    - 客户端传 {userId, refreshToken} 调 POST /auth/refresh
+    - 客户端仅传 {refreshToken} 调 POST /auth/refresh（身份由服务端按 rt 反查，无需自报 userId）
 
-    - 实时查库校验用户存在且未禁用（安全兜底）
+    - 只读反查 userId → 实时查库校验用户存在且未禁用（安全兜底；刻意放在轮换之前，避免数据库故障时烧掉用户的有效会话）
 
-    - 校验 Redis 中 hash 匹配 + 未超 30 天绝对上限，通过后轮换：删旧 refresh、发新 refresh + 新 access
+    - Lua 原子轮换：重验 rt → 双保险比对会话索引 → 绝对上限判定 → 删旧 at/rt → 写新 at/rt（firstLoginTs 保留）
 
-    - 旧 refresh 一经使用立即失效（重放即 1019），Redis 异常 fail-closed 返回 1019
+    - 旧 refresh 一经使用立即失效（重放即 1019），旧 access 随之立即失效；Redis 异常 fail-closed 返回 1019
 
   登出:
 
-    - POST /auth/logout 删除当前用户 refresh 会话（Redis 异常降级成功）
+    - POST /auth/logout 清理会话三键（Redis 异常降级成功），当前 access token 立即失效
 
   管理员强制登出（踢下线）:
 
@@ -566,13 +568,19 @@ RBAC模型:
 
     - 禁止踢自己（1022）、禁止踢内置超管（1021）
 
-    - 删除目标用户 refresh 会话；其当前 access 最长再用 30 分钟，需重新登录
+    - 清理目标用户会话三键，其 access token 立即失效，需重新登录
 
   禁用/解冻:
 
-    - PUT /api/users/{id} 传 status 0/1（沿用 update 链路）；禁用自己的旧 access 即时 401、refresh 拒绝续期
+    - PUT /api/users/{id} 传 status 0/1（沿用 update 链路）；禁用时同步清理会话三键，旧 access 即时 401
 
-    - 保护：禁止禁用自己（1022）、禁止禁内置超管（1020）；删除用户时联动清理 refresh 会话
+    - 每请求实时查库的 isEnabled 为第二道防线；保护：禁止禁用自己（1022）、禁止禁内置超管（1020）
+
+    - 删除用户时联动清理会话三键
+
+  修改密码:
+
+    - 校验原密码后更新密码；成功后清理会话三键强制重新登录（客户端契约：改密返回成功后当前令牌即失效）
 
   异常:
 
@@ -640,7 +648,7 @@ RBAC模型:
 
   - 4: 建 RBAC 五张核心表与实体、Mapper
 
-  - 5: 完成邮箱验证码、注册、登录、JWT、SecurityConfig
+  - 5: 完成邮箱验证码、注册、登录、令牌认证、SecurityConfig
 
   - 6: 完成当前用户信息、登出、修改密码
 
@@ -668,7 +676,7 @@ RBAC模型:
 
   - security.service 不要依赖 AuthService，避免循环依赖
 
-  - JWT 登出、踢人、权限变更要配合 Redis
+  - 令牌登出、踢人、禁用、改密、权限变更都要配合 Redis（会话三键 + 权限缓存）
 
   - 邮箱验证码要限流、过期、防刷
 
@@ -708,6 +716,6 @@ RBAC模型:
 
     - 后续查看日志、字典、配置、公告等
 
-  一句话总结: 这套结构可以做出标准 RBAC 后台管理平台，核心是邮箱认证、JWT、用户/角色/权限管理和统一基础设施。
+  一句话总结: 这套结构可以做出标准 RBAC 后台管理平台，核心是邮箱认证、Redis 有状态令牌会话、用户/角色/权限管理和统一基础设施。
 
 ```

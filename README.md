@@ -2,7 +2,7 @@
 
 > 单体单模块、前后端分离的中小型后台管理系统
 
-当前已实现「认证中心（邮箱+密码+JWT 短期令牌 + refresh token 会话）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」「操作日志（AOP 访问审计）」「用户 Excel 批量导入导出」与「RBAC 权限缓存（Redis）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。用户登出、管理员强制登出（踢下线）、账号禁用/解冻均已在会话层打通。邮箱验证码、access token 黑名单（即时踢下线）等将在后续阶段接入。
+当前已实现「认证中心（邮箱+密码+**Redis 有状态双 token 会话**）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」「操作日志（AOP 访问审计）」「用户 Excel 批量导入导出」与「RBAC 权限缓存（Redis）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。用户登出、管理员强制登出（踢下线）、账号禁用/解冻、删除用户与修改密码均已在会话层打通，**旧 access token 一律立即失效**。邮箱验证码、前端管理界面等将在后续阶段接入。
 
 ---
 
@@ -13,8 +13,8 @@
 | 语言 | Java 21 |
 | 框架 | Spring Boot 3.5.16 |
 | 持久层 | MyBatis-Plus 3.5.17（含分页插件、逻辑删除） |
-| 安全框架 | Spring Security + JWT（jjwt 0.12.6，HS384）+ `@PreAuthorize` 方法级鉴权 |
-| 会话管理 | refresh token 存 Redis（单端登录、滑动续期 7 天 + 30 天绝对上限），支持登出与管理员强制登出 |
+| 安全框架 | Spring Security + 自定义令牌认证过滤器 + `@PreAuthorize` 方法级鉴权（**无 JWT**，令牌为 32 字节随机串） |
+| 会话管理 | Redis 有状态双 token（`at`/`rt`/`session` 三键，Lua 原子脚本），单端登录、滑动续期 7 天 + 30 天绝对上限；**踢人/登出/禁用/删除/改密即时生效** |
 | 权限缓存 | Redis 7.4.x（`spring-boot-starter-data-redis`，用户权限码缓存，未命中回源 MySQL 并回填） |
 | 切面 | Spring AOP（`spring-boot-starter-aop`）操作日志切面 + `@Async` 异步落库 |
 | Excel | EasyExcel 4.0.3（SAX 流式读写，导入解析上传流 / 导出直出响应流，不落盘） |
@@ -22,7 +22,17 @@
 | 密码加密 | BCrypt |
 | 接口风格 | RESTful，统一 `Result` / `PageResult` 返回 |
 
-> 说明：采用 **JWT（access 短期 30 分钟）+ refresh token（存 Redis）** 双令牌会话。access token 无状态，仅在每次请求时校验签名、过期与用户状态（实时查库）；refresh token 为 32 字节随机串（仅存 SHA-256 哈希），key=`qsx:auth:refresh:{userId}`，单端登录（新登录覆盖旧会话），滑动续期（每次刷新重置 7 天）、自首次登录起 30 天绝对上限。刷新采用**轮换**语义（旧 refresh 一经使用立即失效）。角色/权限码经 **Redis 缓存**（key=`qsx:auth:perm:{userId}`，仅缓存权限码，用户行/密码/状态仍实时查库），未命中回源 MySQL 并回填；权限/角色/用户变更在**事务提交后失效**相关缓存（`@TransactionalEventListener` AFTER_COMMIT），变更即时生效。**禁用账号（status=1）即自带踢下线**：access 请求实时校验状态返回 401、refresh 续期被拒；管理员也可仅删除目标用户 refresh 会话实现「强制登出」。redis 异常策略：权限缓存降级回源；会话链路 **fail-closed**（拒绝续期），可用 `qsx.rbac-cache.enabled=false` 关闭权限缓存。
+> 说明：采用 **Redis 有状态双 token**（`access token` + `refresh token`），二者均为 32 字节 SecureRandom 的 hex 随机串，**无签名、无载荷、不可解析出任何用户信息**——身份完全由 Redis 映射决定，因此改邮箱等用户数据变更不会让已签发令牌失配。
+>
+> **三键模型**：`qsx:auth:at:{at}` → userId（30 分钟，删除即吊销）；`qsx:auth:rt:{rt}` → userId（7 天）；`qsx:auth:session:{userId}` → Hash{accessToken, refreshToken, firstLoginTs}（7 天滑动）。签发/轮换/清理三条操作全部由 **Lua 脚本原子执行**，消除并发竞态。
+>
+> **吊销即时生效**：登出、管理员踢人、禁用、删除用户、修改密码都会清理会话三键，旧 access token **立即** 401（不再是等 30 分钟自然过期）。登录为**单端**语义（新登录覆盖旧会话）；刷新为**严格轮换**（旧 refresh 一经使用立即失效，重放返回 1019，故前端必须保证刷新请求单飞）；自首次登录起 **30 天绝对上限**，轮换不续命。
+>
+> **refresh 入参只有 `{refreshToken}`**：身份由服务端按 rt 反查，不再由客户端自报 `userId`。
+>
+> 角色/权限码经 **Redis 缓存**（key=`qsx:auth:perm:{userId}`，仅缓存权限码，用户行/密码/状态仍实时查库），未命中回源 MySQL 并回填；权限/角色/用户变更在**事务提交后失效**相关缓存（`@TransactionalEventListener` AFTER_COMMIT），变更即时生效。
+>
+> **redis 异常策略分级**：会话链路 **fail-closed**（令牌是随机串，Redis 之外无法确定身份，宁可拒绝认证也不错误放行，即 Redis 故障 = 全员 401）；权限缓存 **fail-open**（降级查库，业务可用性优先），可用 `qsx.rbac-cache.enabled=false` 关闭权限缓存。
 
 ## 二、项目结构
 
@@ -45,15 +55,20 @@ QSXManager
 	    │   │   │   │   ├── MybatisPlusConfig.java   # 分页插件 + 字段自动填充
 	    │   │   │   │   ├── AsyncConfig.java         # 异步线程池（操作日志落库）
 	    │   │   │   │   ├── event/                   # 权限缓存失效事件 + AFTER_COMMIT 监听器
-	    │   │   │   │   └── properties/              # JwtProperties / RbacCacheProperties
+	    │   │   │   │   └── properties/              # AuthSessionProperties / RbacCacheProperties
     │   │   │   ├── aspect/                      # AOP 切面
     │   │   │   │   └── OperationLogAspect.java  # 操作日志：Controller 全量审计 + @Async 落库
-│   │   │   ├── security/                    # Spring Security + JWT 认证授权
+│   │   │   ├── security/                    # Spring Security + Redis 有状态双 token
 │   │   │   │   ├── config/SecurityConfig.java
-│   │   │   │   ├── filter/JwtAuthenticationFilter.java
+│   │   │   │   ├── filter/TokenAuthenticationFilter.java  # 每请求 Redis 反查身份
 │   │   │   │   ├── handler/                 # 401 / 403 JSON 处理
 │   │   │   │   ├── model/SecurityUser.java  # 封装角色码(ROLE_前缀) + 权限码
-│   │   │   │   ├── token/JwtTokenProvider.java
+│   │   │   │   ├── session/                 # 会话领域层（三键模型）
+│   │   │   │   │   ├── AuthRedisKeys.java                 # 三键前缀与构造器
+│   │   │   │   │   ├── AuthSession.java                   # 会话凭证（toString 脱敏）
+│   │   │   │   │   ├── AuthSessionService.java
+│   │   │   │   │   └── AuthSessionServiceImpl.java        # 三条 Lua 原子脚本调用
+│   │   │   │   ├── token/TokenProvider.java # AT/RT 同构随机串生成
 │   │   │   │   ├── service/SecurityUserDetailsService.java
 │   │   │   │   └── util/SecurityUtils.java
 │   │   │   ├── domain/                      # 领域模型
@@ -74,8 +89,12 @@ QSXManager
 │   │   │       ├── dto/{request,query}/
 │   │   │       └── vo/                      # 视图对象（不暴露密码）
 │   │   └── resources/
-│   │       └── application.yml              # 应用配置（数据源 / JWT / MyBatis-Plus）
-│   └── test/java/com/qsx/                   # 自动化集成测试（MockMvc + 真实 MySQL）
+│   │       ├── application.yml              # 应用配置（数据源 / Redis / 会话 / MyBatis-Plus）
+│   │       └── lua/                         # 会话 Lua 原子脚本
+│   │           ├── auth_session_issue.lua   # 登录签发（含单端覆盖）
+│   │           ├── auth_session_rotate.lua  # 刷新轮换（含绝对上限判定）
+│   │           └── auth_session_remove.lua  # 会话清理
+│   └── test/java/com/qsx/                   # 自动化集成测试（MockMvc + 真实 MySQL/Redis）
 └── docs/
     └── session-notes/                       # 会话总结存档
 ```
@@ -109,16 +128,16 @@ QSXManager
 
 ## 四、业务功能
 
-### 认证中心（邮箱 + 密码 + JWT + refresh token）
+### 认证中心（邮箱 + 密码 + Redis 有状态双 token）
 
 | 功能 | 接口 | 说明 |
 |------|------|------|
 | 注册 | `POST /auth/register` | 邮箱+密码注册，默认启用 |
-| 登录 | `POST /auth/login` | 校验通过返回 access token + refresh token 与用户信息（含角色码、权限码） |
-| 刷新令牌 | `POST /auth/refresh` | body 传 `{userId, refreshToken}`，换取新令牌对（旧 refresh 立即失效），滑动续期、30 天绝对上限 |
-| 登出 | `POST /auth/logout` | 删除当前用户刷新会话，access token 侧由前端清除 |
+| 登录 | `POST /auth/login` | 校验通过返回 access token + refresh token 与用户信息（含角色码、权限码）；**单端登录**，同用户旧会话立即失效 |
+| 刷新令牌 | `POST /auth/refresh` | body 只传 `{refreshToken}`（身份由服务端反查）；换取新令牌对，**旧 refresh 与其对应的旧 access 均立即失效**（严格轮换，前端须保证刷新单飞）；滑动续期、30 天绝对上限 |
+| 登出 | `POST /auth/logout` | 清理会话三键，**当前 access token 立即失效** |
 | 当前用户 | `GET /auth/me` | 返回当前登录用户信息 |
-| 修改密码 | `POST /auth/change-password` | 需校验原密码 |
+| 修改密码 | `POST /auth/change-password` | 需校验原密码；**改密成功后当前会话被清理，前端应引导重新登录** |
 
 ### 用户管理（需登录 + 权限）
 
@@ -127,10 +146,10 @@ QSXManager
 | 分页查询 | `GET /api/users` | `user:page` | 支持 email / nickname / status 筛选 |
 | 用户详情 | `GET /api/users/{id}` | `user:get` | |
 | 新增用户 | `POST /api/users` | `user:create` | 需唯一邮箱 |
-| 修改用户 | `PUT /api/users/{id}` | `user:update` | 支持改名、改状态（禁用/解冻）、改邮箱（唯一性校验）；**禁止禁用自己、禁止禁用内置超管** |
-| 删除用户 | `DELETE /api/users/{id}` | `user:delete` | 逻辑删除并释放邮箱，联动清理刷新会话 |
+| 修改用户 | `PUT /api/users/{id}` | `user:update` | 支持改名、改状态（禁用/解冻）、改邮箱（唯一性校验）；**禁用即踢下线**（清理会话三键）；**禁止禁用自己、禁止禁用内置超管** |
+| 删除用户 | `DELETE /api/users/{id}` | `user:delete` | 逻辑删除并释放邮箱，联动清理会话三键 |
 | 分配角色 | `PUT /api/users/{id}/roles` | `user:assign-role` | 整表替换用户角色 |
-| 强制登出 | `POST /api/users/{id}/kick` | `user:kick` | 删除目标用户刷新会话（踢下线，账号不受影响）；**禁止踢自己、禁止踢内置超管** |
+| 强制登出 | `POST /api/users/{id}/kick` | `user:kick` | 清理目标用户会话三键（踢下线，账号不受影响），**其 access token 立即失效**；**禁止踢自己、禁止踢内置超管** |
 | 下载导入模板 | `GET /api/users/import/template` | `user:import` | 表头：邮箱/昵称/状态/角色编码 |
 | 批量导入 | `POST /api/users/import` | `user:import` | multipart 上传，整批校验整体拒绝，统一默认密码 |
 | 批量导出 | `GET /api/users/export` | `user:export` | 按筛选条件导出全量，不含密码 |
@@ -182,7 +201,8 @@ QSXManager
 ### 鉴权说明
 - `/auth/register`、`/auth/login`、`/auth/refresh` 匿名放行；
 - 其余接口需携带请求头 `Authorization: Bearer <access token>`；
-- access token 有效期 30 分钟，过期后前端应调用 `/auth/refresh` 静默换新（refresh 为**单飞**设计：并发刷新由前端互斥，后端约定旧 refresh 一经轮换即失效）；refresh 无效/过期返回 1019，前端应清登录态引导重新登录；
+- 每个请求由认证过滤器执行一次 Redis 查身份 + 一次实时查库（禁用/删除即时生效），因此 access token 一旦从 Redis 消失即失效；
+- access token 有效期 30 分钟，过期后前端应调用 `/auth/refresh` 静默换新。**前端契约**：① 刷新必须**单飞**（并发刷新时只有一个成功，其余返回 1019）；② 刷新成功后旧 access token 立即失效，在途请求会 401，应重试而不是直接登出；③ refresh 无效/过期/超 30 天返回 1019，此时应清登录态引导重新登录；
 - URL 级 `authenticated()` + 方法级 `@PreAuthorize` 权限码校验（双保险），权限码经 Redis 缓存加载（未命中回源 MySQL，权限变更事务提交后即时失效）；
 - 未登录返回 401，无权限返回 403，参数校验失败返回 400，均统一为 JSON 格式。
 
@@ -231,7 +251,7 @@ QSXManager
 | JDK | 21 | |
 | Maven | 3.9+ | |
 | MySQL | 8.x Docker 容器，`localhost:3306`，`root/123456`，数据卷持久化 | 建表脚本见 `sql/init.sql` |
-| Redis | 7.4.x Docker 容器，`localhost:6379`（无密码） | RBAC 权限缓存；异常自动降级为实时查库，非启动硬依赖 |
+| Redis | 7.4.x Docker 容器，`localhost:6379`（无密码） | 会话存储（认证链路**硬依赖**，故障即全员 401）+ RBAC 权限缓存（异常自动降级为实时查库） |
 
 > Docker 组件启动命令见 `docs/dev-env/组件依赖README.md`。
 
@@ -247,7 +267,7 @@ docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 <
 > 等价 mysql 客户端方式：`mysql --default-character-set=utf8mb4 -uroot -p123456 < sql/init.sql`（脚本内已声明会话字符集，双保险）。
 
 ### 2. 配置数据源
-编辑 `src/main/resources/application.yml`，设置 `spring.datasource` 与 `jwt.secret`（正式环境务必替换 JWT 密钥）。
+编辑 `src/main/resources/application.yml`，设置 `spring.datasource` 与 `spring.data.redis`，并按需调整 `qsx.auth.session`（`at-ttl` / `rt-ttl` / `max-lifetime`）与 `import.default-password`。
 
 ### 3. 启动
 
@@ -272,13 +292,13 @@ curl -X POST http://localhost:8080/auth/login \
 mvn clean test
 ```
 
-测试复用本地 MySQL 的 QSXManager 库与本地 Redis，执行前需保证两者可连接（Redis 不可用时业务自动降级为实时查库，仅缓存专项测试会受影响）。
+测试复用本地 MySQL 的 QSXManager 库与本地 Redis，**两者都必须可用**：认证链路依赖 Redis，Redis 不可用时绝大部分需要登录态的用例会因 401 失败。测试只清理自己创建的测试用户（`*@test.com`），预置超管与种子权限不会被删除。
 
 ## 七、后续规划
 
 - [x] RBAC 权限缓存（Redis，含失效与降级）
 - [x] 会话管理（登录/登出/强制登出/禁用联动，refresh token 轮换续期）
-- [ ] access token 黑名单（禁用/踢人即时中断，当前依赖实时查库 status 与 30 分钟令牌窗口）
+- [x] access token 即时吊销（双 token 有状态会话改造：登出/踢人/禁用/删除/改密后旧 access token 立即失效，Lua 原子脚本保证并发安全）
 - [ ] 邮箱验证码注册
 - [ ] 登录日志（操作日志已实现）
 - [ ] 前端管理界面（对接菜单树动态路由）
