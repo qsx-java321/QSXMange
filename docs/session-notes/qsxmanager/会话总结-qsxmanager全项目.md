@@ -34,7 +34,7 @@ EasyExcel 流式（文件不落盘）、整批校验整体拒绝、模板含角�
 
 ### 阶段 6 · RBAC 权限缓存（09-12，Redis）
 三处读取点收口 `PermissionCacheService.load`（Redis 优先 + 回源回填 + 空权限防穿透 + enabled 开关）；`AFTER_COMMIT` 事件精确失效；同步补事务注解修复整表替换原子性问题。66 用例 + 真实 HTTP 38 调用全过。
-→ 细节见 `会话总结-qsxmanager-redis-20260912.md` + `docs/test/test-report.md` + `docs/plans/rbac-redis-cache-plan.md`
+→ 细节见 `会话总结-qsxmanager-redis-20260912.md` + `docs/test/test-report.md`（该阶段实施计划已随完成归档删除）
 
 ### 阶段 7 · 会话管理（09-13，refresh token）：登出 / 强踢 / 禁用解冻
 **双令牌会话**：access 30min + refresh（Redis 哈希、单端、滑动 7d + 30d 上限、轮换语义、fail-closed）。新增 `/auth/refresh`、`/auth/logout`、`/api/users/{id}/kick`（user:kick）。**禁用=status 赋值**（自带踢下线），补禁用自己/超管保护。85 用例全过 + 真实 HTTP 全链路。
