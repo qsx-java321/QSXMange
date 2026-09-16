@@ -3,6 +3,7 @@ package com.qsx;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.qsx.domain.entity.User;
+import com.qsx.security.session.AuthRedisKeys;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -32,7 +33,7 @@ class UserKickTest extends BaseIntegrationTest {
     // ---------- 强制登出 ----------
 
     @Test
-    @DisplayName("管理员强踢普通用户后，其 refresh token 失效，需重新登录")
+    @DisplayName("管理员强踢普通用户后，其 access 与 refresh 均立即失效，需重新登录")
     void kick_user_invalidates_refresh() throws Exception {
         LoginSession admin = adminAuth();
         LoginSession target = loginGetAuth(uniqueEmail("kick-target"), "abc123");
@@ -44,11 +45,19 @@ class UserKickTest extends BaseIntegrationTest {
         assertThat(objectMapper.readTree(result.getResponse().getContentAsString()).path("code").asInt())
                 .isEqualTo(200);
 
+        // 被踢者的 access token 立即失效（改造前 JWT 无状态，要等 30 分钟自然过期）
+        mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(target.token())))
+                .andExpect(status().isUnauthorized());
+
         // 被踢者 refresh 续期失败
         MvcResult refreshResult = postJson("/auth/refresh",
                 Map.of("refreshToken", target.refreshToken()));
         assertThat(objectMapper.readTree(refreshResult.getResponse().getContentAsString()).path("code").asInt())
                 .isEqualTo(1019);
+
+        // 会话三键确实被清理（而非仅靠每请求查库的 isEnabled 兜底）
+        assertThat(stringRedisTemplate.hasKey(AuthRedisKeys.session(target.userId()))).isFalse();
+        assertThat(stringRedisTemplate.hasKey(AuthRedisKeys.at(target.token()))).isFalse();
 
         // 重新登录成功（账号未被禁用）
         MvcResult login = mockMvc.perform(post("/auth/login")
@@ -128,6 +137,9 @@ class UserKickTest extends BaseIntegrationTest {
         // 旧 access token 请求立即 401（每请求实时查 status）
         mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(target.token())))
                 .andExpect(status().isUnauthorized());
+        // 禁用同时清理了会话三键：断言 Redis 状态，否则该分支即使漏写也会被上面 401 掩盖
+        assertThat(stringRedisTemplate.hasKey(AuthRedisKeys.session(target.userId()))).isFalse();
+        assertThat(stringRedisTemplate.hasKey(AuthRedisKeys.at(target.token()))).isFalse();
         // 登录被拒
         MvcResult login = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -188,7 +200,7 @@ class UserKickTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("删除用户联动清理 refresh 会话")
+    @DisplayName("删除用户联动清理会话：access 立即失效且三键被清")
     void delete_user_cleans_refresh() throws Exception {
         LoginSession admin = adminAuth();
         LoginSession target = loginGetAuth(uniqueEmail("del-refresh"), "abc123");
@@ -200,7 +212,13 @@ class UserKickTest extends BaseIntegrationTest {
                         .header("Authorization", bearerHeader(admin.token())))
                 .andExpect(status().isOk());
 
-        // 会话已被清理，且 refresh 亦因用户被删而拒绝
+        // 会话三键已被清理
+        assertThat(stringRedisTemplate.hasKey(AuthRedisKeys.session(targetId))).isFalse();
+        assertThat(stringRedisTemplate.hasKey(AuthRedisKeys.at(target.token()))).isFalse();
+
+        // 旧 access token 立即失效；refresh 亦因用户被删而拒绝
+        mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(target.token())))
+                .andExpect(status().isUnauthorized());
         MvcResult refresh = postJson("/auth/refresh",
                 Map.of("refreshToken", target.refreshToken()));
         assertThat(objectMapper.readTree(refresh.getResponse().getContentAsString()).path("code").asInt())

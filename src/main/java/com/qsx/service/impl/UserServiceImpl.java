@@ -129,6 +129,18 @@ public class UserServiceImpl implements UserService {
         }
         user.setStatus(request.getStatus());
         userMapper.updateById(user);
+
+        // 禁用即踢下线：清理会话三键，旧 access token 立即失效。
+        // 守卫必须是「显式传 status=1」——普通资料编辑也会带 status=0，
+        // 守卫写松了会把「改个昵称」变成「强制登出」。
+        // 仅告警不阻断：禁用语义优先，且每请求查库 isEnabled() 是第二道防线
+        if (request.getStatus() != null && request.getStatus() == 1) {
+            try {
+                authSessionService.remove(id);
+            } catch (Exception e) {
+                log.warn("禁用用户时清理会话失败, userId={}", id, e);
+            }
+        }
         return UserVO.from(user);
     }
 
