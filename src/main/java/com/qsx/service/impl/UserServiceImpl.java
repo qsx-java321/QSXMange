@@ -40,6 +40,16 @@ public class UserServiceImpl implements UserService {
 
     private static final String DELETED_EMAIL_SUFFIX_PREFIX = "#deleted_";
 
+    /**
+     * 请求是否在禁用账号：<b>非 0 即禁用</b>。
+     * 必须与 {@code SecurityUser.isEnabled()}（status==0 才放行）以及
+     * {@code AuthServiceImpl.refresh} 的查库兜底用同一谓词，否则会出现
+     * 「按 A 谓词禁用、按 B 谓词清理」的错位。
+     */
+    private static boolean isDisabling(Integer status) {
+        return status != null && status != 0;
+    }
+
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
     private final UserRoleMapper userRoleMapper;
@@ -118,8 +128,10 @@ public class UserServiceImpl implements UserService {
         user.setEmail(request.getEmail());
         user.setNickname(request.getNickname());
 
-        // 禁用保护：status=1（禁用）时——禁止禁用自己、超管不可禁用，防止误操作锁死系统
-        if (request.getStatus() != null && request.getStatus() == 1) {
+        // 禁用保护：请求禁用时——禁止禁用自己、超管不可禁用，防止误操作锁死系统。
+        // 判定用「非 0 即禁用」，与 SecurityUser.isEnabled()（status==0 才放行）保持同一谓词：
+        // 两套谓词错位时，写非 0/1 的其它值可绕过保护并跳过会话清理（DTO 已限 0/1，此处为纵深防御）
+        if (isDisabling(request.getStatus())) {
             if (id.equals(SecurityUtils.getCurrentUserId())) {
                 throw new BusinessException(ResultCode.CANNOT_OPERATE_SELF);
             }
@@ -131,10 +143,10 @@ public class UserServiceImpl implements UserService {
         userMapper.updateById(user);
 
         // 禁用即踢下线：清理会话三键，旧 access token 立即失效。
-        // 守卫必须是「显式传 status=1」——普通资料编辑也会带 status=0，
-        // 守卫写松了会把「改个昵称」变成「强制登出」。
+        // 注意谓词是「非 0 即禁用」而非「== 1」：普通资料编辑带 status=0 不会触发，
+        // 而任何能真正禁用账号的取值都必须清理会话，否则解冻后旧令牌会复活。
         // 仅告警不阻断：禁用语义优先，且每请求查库 isEnabled() 是第二道防线
-        if (request.getStatus() != null && request.getStatus() == 1) {
+        if (isDisabling(request.getStatus())) {
             try {
                 authSessionService.remove(id);
             } catch (Exception e) {

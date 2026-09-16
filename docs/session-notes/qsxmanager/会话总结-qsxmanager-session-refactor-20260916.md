@@ -32,7 +32,7 @@
 | M5 文档收尾 | 本次提交 | README / 设计文档 / 本会话总结 |
 
 - **三键模型**：`qsx:auth:at:{at}` → userId（30min，删除即吊销）、`qsx:auth:rt:{rt}` → userId（7d）、`qsx:auth:session:{userId}` → Hash{accessToken, refreshToken, firstLoginTs}（7d 滑动）
-- **接口契约变化**：`POST /auth/refresh` 入参由 `{userId, refreshToken}` 收敛为 `{refreshToken}`；新增令牌形态校验（形态非法 400，形态合法但未知/失效 1019）
+- **接口契约变化**：`POST /auth/refresh` 入参由 `{userId, refreshToken}` 收敛为 `{refreshToken}`；令牌形态校验在服务层完成，一切 refresh 失败统一 1019（**注**：本阶段曾把形态非法拦成 400，09-17 代码评审判定其破坏前端契约，已改回 1019）
 - **业务行为变化**：改密后强制重新登录；禁用→解冻后旧令牌不再复活；单端登录语义不变
 - **验证结果**：自动化 **109/109 全绿**（改造前基线 88）；真实 HTTP 端到端 8 组场景通过（踢下线即时生效、轮换、并发防双花恰好一成功、改密重登、禁用即时生效、保护规则、401/403 边界、三键 TTL 实测 1800s/604800s）
 

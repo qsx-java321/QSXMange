@@ -124,7 +124,7 @@
 |------|------|------|
 | `POST /api/users/527/kick`（踢自己） | `Bearer <超管 at>` | code=1022 |
 | `PUT /api/users/527` `status=1`（禁用自己） | `Bearer <超管 at>` | code=1022 |
-| `POST /auth/refresh` `{"refreshToken":"forged-not-hex"}` | 无认证 | code=**400**（形态非法，不打 Redis） |
+| `POST /auth/refresh` `{"refreshToken":"forged-not-hex"}` | 无认证 | code=**1019**（形态非法，形态校验在服务层、不打 Redis；与其它 refresh 失败同一契约） |
 | `POST /auth/refresh` `{"refreshToken":"<64 位 hex 未签发>"}` | 无认证 | code=**1019** |
 | `GET /api/users` | 无认证 | HTTP 401 |
 | `GET /api/users` | `Bearer <无 user:page 权限的普通用户>` | HTTP 403 |
@@ -147,7 +147,7 @@
 | 2 | `StringRedisTemplate` 的脚本参数会被 `StringRedisSerializer` 硬 `checkcast String` | 传 `Long`/`Integer` 会在触达 Redis 前抛 `ClassCastException` → **登录全线 500** | 全部 ARGV 以字符串传入（已用 `javap` 核实字节码） |
 | 3 | 刷新采用「先轮换、失败再补偿删除」时序 | 数据库抖动会烧掉用户有效会话（全体被迫重登）；补偿删除还会误删并发建立的新会话 | 改为「只读反查 → 查库 → 原子轮换」，**不做任何补偿** |
 | 4 | 测试基类 `DELETE FROM sys_user` 全表物理删除 | 每次 `mvn test` 都会删掉预置超管 `admin@qsx.com`，需反复手工恢复（历史已多次发生） | 改为仅删测试用户（`email LIKE '%@test.com%'`），种子数据存活；并修正 `page_all` 依赖「库里只有测试用户」的绝对计数断言为相对增量断言 |
-| 5 | 令牌形态校验引入后，畸形令牌语义变化 | 原用例用 `forged-token-value` 断言 1019，实际会返回 400 | 用例拆分为「形态非法 400」与「形态合法但未签发 1019」两条 |
+| 5 | 令牌形态校验引入后，畸形令牌语义变化 | 原用例用 `forged-token-value` 断言 1019，改为 `@Pattern` 后会返回 400 | 09-17 评审判定 400 会破坏「refresh 失败一律 1019」的前端契约，已去掉 `@Pattern`：形态校验下沉服务层，统一返回 1019（仍早于任何 Redis 访问） |
 
 ### 观察项（本次未处理，留待后续）
 

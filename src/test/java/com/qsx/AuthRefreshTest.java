@@ -19,7 +19,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 刷新令牌测试：签发、轮换、失效、禁用/删除联动、绝对上限、单端登录。
  *
  * 入参契约：refresh 仅需 {refreshToken}（身份由服务端按 rt 反查，不再由客户端自报 userId）；
- * 令牌形态必须是 64 位小写 hex——形态非法返回 400，形态合法但未知/已失效返回 1019。
+ * <b>除「未携带令牌」返回 400 外，一切 refresh 失败（形态非法、未知、已轮换、超上限、Redis 异常）
+ * 统一返回 1019</b>——前端据此清理登录态重新登录。
  */
 class AuthRefreshTest extends BaseIntegrationTest {
 
@@ -91,11 +92,13 @@ class AuthRefreshTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("形态非法的 refresh token 返回 400（不打 Redis）")
+    @DisplayName("形态非法的 refresh token 返回 1019（与其它 refresh 失败同一契约，不打 Redis）")
     void refresh_malformed_token() throws Exception {
+        // 刻意不返回 400：前端契约是「refresh 失败一律 1019 → 清理登录态重新登录」，
+        // 若形态非法单独返回 400，前端会当作参数错误反复重试，用户卡死
         MvcResult result = postJson("/auth/refresh", Map.of("refreshToken", "forged-token-value"));
         JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
-        assertThat(json.path("code").asInt()).isEqualTo(400);
+        assertThat(json.path("code").asInt()).isEqualTo(1019);
     }
 
     @Test

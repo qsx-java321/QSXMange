@@ -112,7 +112,15 @@ public class AuthServiceImpl implements AuthService {
         String rawRefreshToken = request.getRefreshToken();
 
         // 1. 只读反查身份（不消耗令牌）：refresh token 自身即身份来源，无需客户端自报 userId
-        Long userId = authSessionService.findUserIdByRefreshToken(rawRefreshToken);
+        Long userId;
+        try {
+            userId = authSessionService.findUserIdByRefreshToken(rawRefreshToken);
+        } catch (Exception e) {
+            // 与第 3 步 rotate 保持同一契约：Redis 故障一律 1019（fail-closed）。
+            // 否则同一次故障落在不同步骤会分别返回 500 / 1019，前端行为不一致
+            log.error("刷新令牌反查失败（Redis 异常，fail-closed）", e);
+            throw new BusinessException(ResultCode.REFRESH_TOKEN_INVALID);
+        }
         if (userId == null) {
             throw new BusinessException(ResultCode.REFRESH_TOKEN_INVALID);
         }
@@ -170,7 +178,10 @@ public class AuthServiceImpl implements AuthService {
         try {
             authSessionService.remove(current.getId());
         } catch (Exception e) {
-            log.warn("改密后清理会话失败（旧令牌仍可用至过期）, userId={}", current.getId(), e);
+            // ERROR 级：与禁用不同，改密没有任何「每请求查库」的兜底网
+            //（refresh 的查库只看 deleted/status，不看密码），此处失败即意味着
+            //「改密止损」未生效——旧 refresh token 最长仍可续期 7 天。必须可告警、可检索。
+            log.error("改密后清理会话失败：旧令牌仍有效，改密止损未生效, userId={}", current.getId(), e);
         }
     }
 }

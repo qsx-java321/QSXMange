@@ -140,6 +140,17 @@ class UserControllerTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("新增用户传非法 status（非 0/1）被拒")
+    void create_invalidStatus_rejected() throws Exception {
+        String token = adminToken();
+        // 系统按「status != 0 即禁用」判定，放任其它取值会造出「建好就登不进、也没人知道为什么」的账号
+        MvcResult result = createUser(token, uniqueEmail("create-bad"), "abc123", 2);
+
+        assertThat(objectMapper.readTree(result.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(400);
+    }
+
+    @Test
     @DisplayName("新增邮箱重复")
     void create_duplicate() throws Exception {
         String token = adminToken();

@@ -1,5 +1,6 @@
 package com.qsx.config.properties;
 
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -28,6 +29,27 @@ public class AuthSessionProperties {
     /** 自首次登录起的会话绝对上限，轮换不重置，默认 30 天 */
     @NotNull
     private Duration maxLifetime = Duration.ofDays(30);
+
+    /**
+     * 配置合法性校验（启动期失败，而非首次登录/刷新时才暴露）。
+     *
+     * 关键防呆：Duration 绑定允许纯数字，`max-lifetime: 30` 会被当作 **30 毫秒**——
+     * 结果所有会话在首次刷新时被判超绝对上限而整批作废（用户被强制登出），
+     * 且启动、登录、刷新接口都不会报任何配置错误。
+     */
+    @AssertTrue(message = "qsx.auth.session 配置不合法：at-ttl / rt-ttl / max-lifetime 均须 ≥ 1 分钟，"
+            + "且满足 at-ttl ≤ rt-ttl ≤ max-lifetime（注意纯数字会被当作毫秒）")
+    public boolean isTtlConfigurationValid() {
+        if (atTtl == null || rtTtl == null || maxLifetime == null) {
+            return true; // 交由 @NotNull 报告更准确的错误
+        }
+        Duration oneMinute = Duration.ofMinutes(1);
+        return atTtl.compareTo(oneMinute) >= 0
+                && rtTtl.compareTo(oneMinute) >= 0
+                && maxLifetime.compareTo(oneMinute) >= 0
+                && atTtl.compareTo(rtTtl) <= 0
+                && rtTtl.compareTo(maxLifetime) <= 0;
+    }
 
     /**
      * at 键 TTL（秒）。

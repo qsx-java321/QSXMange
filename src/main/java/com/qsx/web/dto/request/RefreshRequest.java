@@ -1,8 +1,6 @@
 package com.qsx.web.dto.request;
 
-import com.qsx.security.session.AuthSessionService;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 
 /**
@@ -16,9 +14,12 @@ public class RefreshRequest {
 
     /**
      * 刷新令牌（32 字节随机数的 hex 编码）。
-     * 形态校验先行：令牌会直接参与 Redis 键名构造，挡掉畸形输入可避免无谓的 Redis 往返
+     *
+     * 此处只校验非空，**不做形态（@Pattern）校验**：形态由 AuthSessionServiceImpl 判定并
+     * 统一返回 1019。若在参数层用 @Pattern 拦成 400，会破坏「refresh 失败一律 1019」的
+     * 前端契约——前端只在 1019 时清理登录态，拿到 400 会当作参数错误反复重试，用户卡在
+     * 「令牌已失效但页面无反应」。服务端形态校验仍早于任何 Redis 访问，安全性质不变。
      */
     @NotBlank(message = "刷新令牌不能为空")
-    @Pattern(regexp = AuthSessionService.TOKEN_REGEX, message = "刷新令牌格式不正确")
     private String refreshToken;
 }

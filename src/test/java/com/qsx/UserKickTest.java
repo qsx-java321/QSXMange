@@ -186,6 +186,63 @@ class UserKickTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("非法 status（非 0/1）被参数校验拒绝，且不得禁用账号或清理会话")
+    void invalid_status_rejected() throws Exception {
+        LoginSession admin = adminAuth();
+        LoginSession target = loginGetAuth(uniqueEmail("bad-status"), "abc123");
+
+        // 非 0/1 的 status 必须被拒：系统按「status != 0 即禁用」判定，
+        // 而禁用保护与会话清理按「status == 1」判定——两套谓词错位时，
+        // 传 2 可以禁用账号却不触发保护、不清理会话，解冻后旧令牌复活
+        MvcResult result = mockMvc.perform(put("/api/users/" + target.userId())
+                        .header("Authorization", bearerHeader(admin.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + target.email() + "\",\"status\":2}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(result.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(400);
+
+        // 账号未被改动：仍可访问，会话三键仍在
+        mockMvc.perform(get("/auth/me").header("Authorization", bearerHeader(target.token())))
+                .andExpect(status().isOk());
+        assertThat(stringRedisTemplate.hasKey(AuthRedisKeys.session(target.userId()))).isTrue();
+    }
+
+    @Test
+    @DisplayName("对超管与自己传非法 status 同样被拒（保护规则不可被绕过）")
+    void invalid_status_cannot_bypass_protection() throws Exception {
+        LoginSession admin = adminAuth();
+        LoginSession anotherAdmin = adminAuth();
+
+        // 对自己：若放行会返回 200 并把超管写成非 0 状态 → 请求全 401、登录 1003，且无接口可改回
+        MvcResult self = mockMvc.perform(put("/api/users/" + admin.userId())
+                        .header("Authorization", bearerHeader(admin.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + admin.email() + "\",\"status\":2}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(self.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(400);
+
+        // 对内置超管：status=1 走 1020 保护，status=2 必须同样拦在参数层
+        MvcResult other = mockMvc.perform(put("/api/users/" + anotherAdmin.userId())
+                        .header("Authorization", bearerHeader(admin.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + anotherAdmin.email() + "\",\"status\":2}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(other.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(400);
+
+        // 两个超管账号都未受影响
+        mockMvc.perform(get("/auth/me").header("Authorization", bearerHeader(admin.token())))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/auth/me").header("Authorization", bearerHeader(anotherAdmin.token())))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     @DisplayName("不允许禁用自己")
     void disable_self_rejected() throws Exception {
         LoginSession admin = adminAuth();
