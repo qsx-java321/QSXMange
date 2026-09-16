@@ -31,4 +31,12 @@ public interface UserRoleMapper extends BaseMapper<UserRole> {
      */
     @Select("SELECT DISTINCT user_id FROM sys_user_role WHERE role_id = #{roleId}")
     List<Long> selectUserIdsByRoleId(@Param("roleId") Long roleId);
+
+    /**
+     * 查询持有指定权限（经角色间接持有）的全部用户 ID（权限缓存失效用，单条联表替代两级反查）
+     */
+    @Select("SELECT DISTINCT ur.user_id FROM sys_user_role ur " +
+            "JOIN sys_role_permission rp ON rp.role_id = ur.role_id " +
+            "WHERE rp.permission_id = #{permissionId}")
+    List<Long> selectUserIdsByPermissionId(@Param("permissionId") Long permissionId);
 }

@@ -2,9 +2,7 @@ package com.qsx.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qsx.config.properties.RbacCacheProperties;
-import com.qsx.mapper.RolePermissionMapper;
 import com.qsx.mapper.UserMapper;
-import com.qsx.mapper.UserRoleMapper;
 import com.qsx.security.model.PermissionCacheData;
 import com.qsx.service.PermissionCacheService;
 import org.slf4j.Logger;
@@ -12,10 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.Collection;
 import java.util.stream.Collectors;
 
 /**
@@ -36,21 +31,15 @@ public class PermissionCacheServiceImpl implements PermissionCacheService {
     private static final String KEY_PREFIX = "qsx:auth:perm:";
 
     private final UserMapper userMapper;
-    private final UserRoleMapper userRoleMapper;
-    private final RolePermissionMapper rolePermissionMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final RbacCacheProperties properties;
 
     public PermissionCacheServiceImpl(UserMapper userMapper,
-                                      UserRoleMapper userRoleMapper,
-                                      RolePermissionMapper rolePermissionMapper,
                                       StringRedisTemplate stringRedisTemplate,
                                       ObjectMapper objectMapper,
                                       RbacCacheProperties properties) {
         this.userMapper = userMapper;
-        this.userRoleMapper = userRoleMapper;
-        this.rolePermissionMapper = rolePermissionMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.properties = properties;
@@ -80,45 +69,14 @@ public class PermissionCacheServiceImpl implements PermissionCacheService {
     }
 
     @Override
-    public void evictUser(Long userId) {
-        if (!properties.isEnabled()) {
+    public void evictUsers(Collection<Long> userIds) {
+        if (!properties.isEnabled() || userIds == null || userIds.isEmpty()) {
             return;
         }
         try {
-            stringRedisTemplate.delete(key(userId));
+            stringRedisTemplate.delete(userIds.stream().map(this::key).collect(Collectors.toList()));
         } catch (Exception e) {
-            log.warn("失效权限缓存失败, userId={}（依赖 TTL 兜底）", userId, e);
-        }
-    }
-
-    @Override
-    public void evictUsersByRoleId(Long roleId) {
-        if (!properties.isEnabled()) {
-            return;
-        }
-        try {
-            List<Long> userIds = userRoleMapper.selectUserIdsByRoleId(roleId);
-            evictUsers(userIds);
-        } catch (Exception e) {
-            log.warn("失效角色权限缓存失败, roleId={}（依赖 TTL 兜底）", roleId, e);
-        }
-    }
-
-    @Override
-    public void evictUsersByPermissionId(Long permissionId) {
-        if (!properties.isEnabled()) {
-            return;
-        }
-        try {
-            // 权限 → 角色 → 用户，两级反查后合并去重
-            List<Long> roleIds = rolePermissionMapper.selectRoleIdsByPermissionId(permissionId);
-            Set<Long> userIds = new LinkedHashSet<>();
-            for (Long roleId : roleIds) {
-                userIds.addAll(userRoleMapper.selectUserIdsByRoleId(roleId));
-            }
-            evictUsers(new ArrayList<>(userIds));
-        } catch (Exception e) {
-            log.warn("失效权限缓存失败, permissionId={}（依赖 TTL 兜底）", permissionId, e);
+            log.warn("失效权限缓存失败, userIds={}（依赖 TTL 兜底）", userIds, e);
         }
     }
 
@@ -129,14 +87,6 @@ public class PermissionCacheServiceImpl implements PermissionCacheService {
         data.setRoles(userMapper.selectRoleCodes(userId));
         data.setPermissions(userMapper.selectPermissionCodes(userId));
         return data;
-    }
-
-    private void evictUsers(List<Long> userIds) {
-        if (userIds == null || userIds.isEmpty()) {
-            return;
-        }
-        List<String> keys = userIds.stream().map(this::key).collect(Collectors.toList());
-        stringRedisTemplate.delete(keys);
     }
 
     private String key(Long userId) {

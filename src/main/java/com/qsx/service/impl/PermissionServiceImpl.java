@@ -12,6 +12,7 @@ import com.qsx.domain.entity.RolePermission;
 import com.qsx.domain.entity.User;
 import com.qsx.mapper.PermissionMapper;
 import com.qsx.mapper.RolePermissionMapper;
+import com.qsx.mapper.UserRoleMapper;
 import com.qsx.security.model.PermissionCacheData;
 import com.qsx.security.util.SecurityUtils;
 import com.qsx.service.PermissionCacheService;
@@ -43,15 +44,18 @@ public class PermissionServiceImpl implements PermissionService {
 
     private final PermissionMapper permissionMapper;
     private final RolePermissionMapper rolePermissionMapper;
+    private final UserRoleMapper userRoleMapper;
     private final PermissionCacheService permissionCacheService;
     private final ApplicationEventPublisher eventPublisher;
 
     public PermissionServiceImpl(PermissionMapper permissionMapper,
                                  RolePermissionMapper rolePermissionMapper,
+                                 UserRoleMapper userRoleMapper,
                                  PermissionCacheService permissionCacheService,
                                  ApplicationEventPublisher eventPublisher) {
         this.permissionMapper = permissionMapper;
         this.rolePermissionMapper = rolePermissionMapper;
+        this.userRoleMapper = userRoleMapper;
         this.permissionCacheService = permissionCacheService;
         this.eventPublisher = eventPublisher;
     }
@@ -115,8 +119,12 @@ public class PermissionServiceImpl implements PermissionService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public PermissionVO update(Long id, MenuUpdateRequest request) {
         Permission permission = getPermission(id);
+        // 先反查持有者：标识（code）变更会改变用户权限码集合，须失效其缓存；
+        // 反查须在改动关联前完成，且本方法必须有事务，否则 AFTER_COMMIT 监听器不会触发
+        Set<Long> affectedUserIds = new HashSet<>(userRoleMapper.selectUserIdsByPermissionId(id));
         // 标识唯一性校验（排除自身）
         Permission existing = selectByCode(request.getCode());
         if (existing != null && !existing.getId().equals(id)) {
@@ -134,6 +142,9 @@ public class PermissionServiceImpl implements PermissionService {
         permission.setVisible(request.getVisible());
         permission.setSort(request.getSort());
         permissionMapper.updateById(permission);
+
+        // 事务提交后失效持有该菜单/权限的全部用户缓存
+        eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUsers(affectedUserIds));
         return PermissionVO.from(permission);
     }
 
@@ -147,13 +158,17 @@ public class PermissionServiceImpl implements PermissionService {
         if (childCount > 0) {
             throw new BusinessException(ResultCode.MENU_HAS_CHILDREN);
         }
+        // 先反查持有该菜单/权限的用户：紧接着角色-权限关联就会被物理删除，必须在此之前取快照，
+        // 否则事务提交后已无从反查，被删权限码将在缓存中继续通过 @PreAuthorize 直至 TTL 到期
+        Set<Long> affectedUserIds = new HashSet<>(userRoleMapper.selectUserIdsByPermissionId(id));
+
         // 清理角色-权限关联，再逻辑删除
         rolePermissionMapper.delete(
                 new LambdaQueryWrapper<RolePermission>().eq(RolePermission::getPermissionId, id));
         permissionMapper.deleteById(id);
 
         // 事务提交后失效持有该权限的全部用户缓存（菜单/权限删除影响其下所有持有者）
-        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.PERMISSION, id));
+        eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUsers(affectedUserIds));
     }
 
     @Override

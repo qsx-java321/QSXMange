@@ -2,6 +2,8 @@ package com.qsx.service;
 
 import com.qsx.security.model.PermissionCacheData;
 
+import java.util.Collection;
+
 /**
  * RBAC 权限缓存服务：统一收口用户权限码（角色码 + 权限码）的读取与失效
  *
@@ -17,17 +19,8 @@ public interface PermissionCacheService {
     PermissionCacheData load(Long userId);
 
     /**
-     * 失效单个用户的权限缓存（分配角色 / 删除用户时调用）
+     * 失效一批用户的权限缓存。
+     * 受影响用户由调用方在改动关联表之前反查（见 UserRoleMapper），随事件携带至此
      */
-    void evictUser(Long userId);
-
-    /**
-     * 失效某角色下全部用户的权限缓存（角色改码 / 删角色 / 分配权限时调用）
-     */
-    void evictUsersByRoleId(Long roleId);
-
-    /**
-     * 失效持有某权限的全部用户的权限缓存（删除菜单/权限时调用）
-     */
-    void evictUsersByPermissionId(Long permissionId);
+    void evictUsers(Collection<Long> userIds);
 }

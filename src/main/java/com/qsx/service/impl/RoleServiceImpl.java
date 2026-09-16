@@ -24,7 +24,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -95,6 +97,8 @@ public class RoleServiceImpl implements RoleService {
     @Transactional(rollbackFor = Exception.class)
     public RoleVO update(Long id, RoleUpdateRequest request) {
         Role role = getRole(id);
+        // 先反查该角色下用户（编码变更影响其 ROLE_xxx authority），供事务提交后失效
+        Set<Long> affectedUserIds = new HashSet<>(userRoleMapper.selectUserIdsByRoleId(id));
         // 编码被修改时校验唯一性（排除自身）
         if (!request.getCode().equals(role.getCode())) {
             Role existing = selectByCode(request.getCode());
@@ -108,8 +112,8 @@ public class RoleServiceImpl implements RoleService {
         role.setStatus(request.getStatus());
         roleMapper.updateById(role);
 
-        // 角色信息变更（尤其编码影响 ROLE_xxx authority），事务提交后失效其下全部用户缓存
-        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.ROLE, id));
+        // 事务提交后失效其下全部用户缓存
+        eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUsers(affectedUserIds));
         return RoleVO.from(role);
     }
 
@@ -121,6 +125,10 @@ public class RoleServiceImpl implements RoleService {
         if (BUILT_IN_ADMIN_CODE.equals(role.getCode())) {
             throw new BusinessException(ResultCode.ROLE_IN_USE);
         }
+        // 先反查该角色下用户：紧接着关联行就会被物理删除，必须在此之前取快照，
+        // 否则事务提交后已无从反查，其权限缓存将残留至 TTL 到期
+        Set<Long> affectedUserIds = new HashSet<>(userRoleMapper.selectUserIdsByRoleId(id));
+
         // 先物理清关联，再逻辑删除角色
         rolePermissionMapper.delete(
                 new LambdaQueryWrapper<RolePermission>().eq(RolePermission::getRoleId, id));
@@ -129,7 +137,7 @@ public class RoleServiceImpl implements RoleService {
         roleMapper.deleteById(id);
 
         // 事务提交后失效该角色下全部用户缓存
-        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.ROLE, id));
+        eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUsers(affectedUserIds));
     }
 
     @Override
@@ -144,6 +152,9 @@ public class RoleServiceImpl implements RoleService {
                 }
             }
         }
+        // 先反查该角色下用户：授权即将整表替换，须在改动关联前取快照
+        Set<Long> affectedUserIds = new HashSet<>(userRoleMapper.selectUserIdsByRoleId(roleId));
+
         // 整表替换：先物理删旧，再批量插新
         rolePermissionMapper.delete(
                 new LambdaQueryWrapper<RolePermission>().eq(RolePermission::getRoleId, roleId));
@@ -163,7 +174,7 @@ public class RoleServiceImpl implements RoleService {
         }
 
         // 事务提交后失效该角色下全部用户缓存
-        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.ROLE, roleId));
+        eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUsers(affectedUserIds));
     }
 
     @Override

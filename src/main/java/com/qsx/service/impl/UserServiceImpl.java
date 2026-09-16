@@ -157,7 +157,7 @@ public class UserServiceImpl implements UserService {
         }
 
         // 事务提交后失效该用户权限缓存
-        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.USER, id));
+        eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUser(id));
     }
 
     @Override
@@ -193,7 +193,7 @@ public class UserServiceImpl implements UserService {
         }
 
         // 事务提交后失效该用户权限缓存
-        eventPublisher.publishEvent(new PermissionCacheEvictEvent(PermissionCacheEvictEvent.Type.USER, userId));
+        eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUser(userId));
     }
 
     @Override
