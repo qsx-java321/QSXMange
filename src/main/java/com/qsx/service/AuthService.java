@@ -19,17 +19,18 @@ public interface AuthService {
     void register(RegisterRequest request);
 
     /**
-     * 登录，返回 access token 与 refresh token
+     * 登录，返回 access token 与 refresh token（同一用户旧会话立即失效，单端登录）
      */
     LoginVO login(LoginRequest request);
 
     /**
-     * 刷新令牌：access token 过期后，用 refresh token 轮换换取新的令牌对
+     * 刷新令牌：access token 过期后，用 refresh token 轮换换取新的令牌对。
+     * 旧 refresh token 一经使用立即失效（严格轮换，前端须保证刷新请求单飞）。
      */
     RefreshVO refresh(RefreshRequest request);
 
     /**
-     * 登出：删除当前用户的刷新会话
+     * 登出：清理当前用户的会话三键（qsx:auth:at/rt/session），access token 立即失效
      */
     void logout();
 

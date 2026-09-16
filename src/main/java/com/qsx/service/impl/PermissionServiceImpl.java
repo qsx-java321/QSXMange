@@ -174,7 +174,7 @@ public class PermissionServiceImpl implements PermissionService {
     @Override
     public List<PermissionVO> getUserMenuTree() {
         User current = SecurityUtils.getCurrentUser();
-        // 权限码从缓存读取（JWT 过滤器已回填，此处直接命中）
+        // 权限码从缓存读取（认证过滤器已回填，此处直接命中）
         PermissionCacheData data = permissionCacheService.load(current.getId());
         List<String> ownedCodes = data.getPermissions();
         if (ownedCodes.isEmpty()) {

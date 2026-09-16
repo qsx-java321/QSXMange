@@ -8,17 +8,21 @@ import com.qsx.domain.entity.User;
 import com.qsx.mapper.RoleMapper;
 import com.qsx.mapper.UserMapper;
 import com.qsx.mapper.UserRoleMapper;
+import com.qsx.security.session.AuthRedisKeys;
 import com.qsx.service.UserService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -65,8 +69,11 @@ public abstract class BaseIntegrationTest {
     /** RBAC 权限缓存 key 前缀（与 PermissionCacheServiceImpl 保持一致） */
     private static final String RBAC_CACHE_KEY_PREFIX = "qsx:auth:perm:";
 
-    /** 刷新会话 key 前缀（与 RefreshTokenServiceImpl 保持一致） */
-    private static final String REFRESH_SESSION_KEY_PREFIX = "qsx:auth:refresh:";
+    /** 会话三键前缀（与 AuthRedisKeys 保持一致）：access token / refresh token / 会话索引 */
+    private static final List<String> SESSION_KEY_PREFIXES = List.of(
+            AuthRedisKeys.AT_PREFIX,
+            AuthRedisKeys.RT_PREFIX,
+            AuthRedisKeys.SESSION_PREFIX);
 
     /** 登录会话（token / refreshToken / userId / email） */
     protected record LoginSession(String token, String refreshToken, Long userId, String email) {
@@ -90,20 +97,34 @@ public abstract class BaseIntegrationTest {
     }
 
     /**
-     * 清理 RBAC 权限缓存与刷新会话 key（避免跨用例污染；Redis 不可用时静默跳过）
+     * 清理 RBAC 权限缓存与会话三键（避免跨用例污染）。
+     *
+     * 注意：认证链路现已依赖 Redis，Redis 不可用时本方法静默跳过，
+     * 但需要登录态的用例会因 401 大批失败并暴露问题。
      */
     private void cleanPermissionCache() {
         try {
-            Set<String> keys = stringRedisTemplate.keys(RBAC_CACHE_KEY_PREFIX + "*");
-            if (keys != null && !keys.isEmpty()) {
-                stringRedisTemplate.delete(keys);
-            }
-            Set<String> refreshKeys = stringRedisTemplate.keys(REFRESH_SESSION_KEY_PREFIX + "*");
-            if (refreshKeys != null && !refreshKeys.isEmpty()) {
-                stringRedisTemplate.delete(refreshKeys);
+            scanAndDelete(RBAC_CACHE_KEY_PREFIX + "*");
+            for (String prefix : SESSION_KEY_PREFIXES) {
+                scanAndDelete(prefix + "*");
             }
         } catch (Exception e) {
-            // Redis 不可用则忽略（业务侧已降级为实时查库）
+            // Redis 不可用则忽略
+        }
+    }
+
+    /**
+     * 用 scan 而非 keys：keys 是 O(N) 阻塞命令，
+     * 而本清理在每个用例前后各执行一次（会话键会随每次登录累积）
+     */
+    private void scanAndDelete(String pattern) {
+        try (Cursor<String> cursor = stringRedisTemplate.scan(
+                ScanOptions.scanOptions().match(pattern).count(500).build())) {
+            Set<String> keys = new HashSet<>();
+            cursor.forEachRemaining(keys::add);
+            if (!keys.isEmpty()) {
+                stringRedisTemplate.delete(keys);
+            }
         }
     }
 

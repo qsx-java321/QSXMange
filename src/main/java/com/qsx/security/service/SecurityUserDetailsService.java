@@ -40,4 +40,20 @@ public class SecurityUserDetailsService implements UserDetailsService {
         PermissionCacheData data = permissionCacheService.load(user.getId());
         return new SecurityUser(user, data.getRoles(), data.getPermissions());
     }
+
+    /**
+     * 按 userId 加载（认证过滤器用：access token 经 Redis 反查得到 userId）。
+     *
+     * 用户行仍实时查库（@TableLogic 自动过滤已删除用户），禁用/删除即时生效。
+     * <b>必须与 loadUserByUsername 一样填充角色/权限</b>：若改用单参构造
+     * {@code new SecurityUser(user)}，authorities 会为空，导致所有 @PreAuthorize 变成 403。
+     */
+    public SecurityUser loadUserById(Long userId) {
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new UsernameNotFoundException("用户不存在");
+        }
+        PermissionCacheData data = permissionCacheService.load(userId);
+        return new SecurityUser(user, data.getRoles(), data.getPermissions());
+    }
 }

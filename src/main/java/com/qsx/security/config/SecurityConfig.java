@@ -1,7 +1,7 @@
 package com.qsx.security.config;
 
 import com.qsx.common.constant.SecurityConstants;
-import com.qsx.security.filter.JwtAuthenticationFilter;
+import com.qsx.security.filter.TokenAuthenticationFilter;
 import com.qsx.security.handler.RestAccessDeniedHandler;
 import com.qsx.security.handler.RestAuthenticationEntryPoint;
 import org.springframework.context.annotation.Bean;
@@ -30,14 +30,14 @@ import java.util.List;
 @EnableMethodSecurity
 public class SecurityConfig {
 
-    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final TokenAuthenticationFilter tokenAuthenticationFilter;
     private final RestAuthenticationEntryPoint authenticationEntryPoint;
     private final RestAccessDeniedHandler accessDeniedHandler;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
+    public SecurityConfig(TokenAuthenticationFilter tokenAuthenticationFilter,
                           RestAuthenticationEntryPoint authenticationEntryPoint,
                           RestAccessDeniedHandler accessDeniedHandler) {
-        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.tokenAuthenticationFilter = tokenAuthenticationFilter;
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.accessDeniedHandler = accessDeniedHandler;
     }
@@ -55,11 +55,11 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                // 禁用 CSRF（前后端分离 + JWT）
+                // 禁用 CSRF（前后端分离 + 令牌认证）
                 .csrf(AbstractHttpConfigurer::disable)
                 // 启用 CORS（使用下方 CorsConfigurationSource）
                 .cors(Customizer.withDefaults())
-                // 无状态会话
+                // 无状态会话：会话状态保存在 Redis（qsx:auth:session:*），不使用 HttpSession
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 // 异常处理
                 .exceptionHandling(handler -> handler
@@ -70,8 +70,8 @@ public class SecurityConfig {
                         .requestMatchers(SecurityConstants.REGISTER_URL, SecurityConstants.LOGIN_URL,
                                 SecurityConstants.REFRESH_URL).permitAll()
                         .anyRequest().authenticated())
-                // 添加 JWT 过滤器
-                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+                // 添加令牌认证过滤器
+                .addFilterBefore(tokenAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 

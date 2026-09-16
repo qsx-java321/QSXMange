@@ -14,6 +14,10 @@ spring:
       # 本地 Redis 容器（redis:7.4.9，无密码，见 docs/dev-env/组件依赖README.md）
       host: localhost
       port: 6379
+      # 认证链路依赖 Redis（令牌有效性以 Redis 为准），必须显式设置超时：
+      # 默认 60s 会让 Redis 故障时每个请求都挂 60 秒才失败
+      timeout: 2s
+      connect-timeout: 1s
   servlet:
     multipart:
       # Excel 导入上传大小限制
@@ -40,21 +44,6 @@ mybatis-plus:
 import:
   # 批量导入用户的默认初始密码（上线前务必替换并妥善保管）
   default-password: qsx123456
-
-# JWT 自定义配置
-jwt:
-  # 密钥（HS256 要求至少 32 字节，正式环境务必替换并妥善保管）
-  secret: QSXManager-Secret-Key-For-JWT-HS256-Sign-and-Verify-2026
-  # access token 过期时间（毫秒），30 分钟
-  expiration: 1800000
-  # refresh token 过期时间（毫秒），7 天（每次续期重置，滑动续期）
-  refresh-expiration: 604800000
-  # refresh token 绝对有效上限（毫秒），30 天（自首次登录起算，到期强制重新登录）
-  refresh-max-lifetime: 2592000000
-  # 请求头名称
-  header: Authorization
-  # Token 前缀
-  prefix: "Bearer "
 
 # RBAC 权限缓存配置（Redis）
 qsx:

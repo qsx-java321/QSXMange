@@ -8,7 +8,7 @@ import lombok.Data;
 @Data
 public class RefreshVO {
 
-    /** 新的 access token（JWT） */
+    /** 新的 access token（32 字节随机串，有效性以 Redis 为准） */
     private String token;
 
     /** 新的 refresh token（旧令牌轮换后立即失效） */

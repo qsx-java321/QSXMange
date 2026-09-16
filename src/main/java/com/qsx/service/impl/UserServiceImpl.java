@@ -13,8 +13,8 @@ import com.qsx.domain.entity.UserRole;
 import com.qsx.mapper.RoleMapper;
 import com.qsx.mapper.UserMapper;
 import com.qsx.mapper.UserRoleMapper;
+import com.qsx.security.session.AuthSessionService;
 import com.qsx.security.util.SecurityUtils;
-import com.qsx.service.RefreshTokenService;
 import com.qsx.service.UserService;
 import com.qsx.web.dto.query.UserQuery;
 import com.qsx.web.dto.request.UserCreateRequest;
@@ -45,20 +45,20 @@ public class UserServiceImpl implements UserService {
     private final UserRoleMapper userRoleMapper;
     private final RoleMapper roleMapper;
     private final ApplicationEventPublisher eventPublisher;
-    private final RefreshTokenService refreshTokenService;
+    private final AuthSessionService authSessionService;
 
     public UserServiceImpl(UserMapper userMapper,
                            PasswordEncoder passwordEncoder,
                            UserRoleMapper userRoleMapper,
                            RoleMapper roleMapper,
                            ApplicationEventPublisher eventPublisher,
-                           RefreshTokenService refreshTokenService) {
+                           AuthSessionService authSessionService) {
         this.userMapper = userMapper;
         this.passwordEncoder = passwordEncoder;
         this.userRoleMapper = userRoleMapper;
         this.roleMapper = roleMapper;
         this.eventPublisher = eventPublisher;
-        this.refreshTokenService = refreshTokenService;
+        this.authSessionService = authSessionService;
     }
 
     @Override
@@ -149,11 +149,11 @@ public class UserServiceImpl implements UserService {
         // 逻辑删除（deleted -> 1）
         userMapper.deleteById(id);
 
-        // 同步清理刷新会话；Redis 异常仅告警，不阻断删除（删除语义优先）
+        // 同步清理会话（at/rt/session 三键）；Redis 异常仅告警，不阻断删除（删除语义优先）
         try {
-            refreshTokenService.remove(id);
+            authSessionService.remove(id);
         } catch (Exception e) {
-            log.warn("删除用户时清理刷新会话失败, userId={}", id, e);
+            log.warn("删除用户时清理会话失败, userId={}", id, e);
         }
 
         // 事务提交后失效该用户权限缓存
@@ -210,8 +210,9 @@ public class UserServiceImpl implements UserService {
         if (userMapper.selectRoleCodes(id).contains(RoleConstants.ADMIN)) {
             throw new BusinessException(ResultCode.ADMIN_USER_CANNOT_KICK);
         }
-        // 删除目标刷新会话；Redis 异常不静默（fail-closed），由全局兜底返回 500
-        refreshTokenService.remove(id);
+        // 清理目标会话（at/rt/session 三键）：旧 access token 立即失效；
+        // Redis 异常不静默（fail-closed），由全局兜底返回 500
+        authSessionService.remove(id);
     }
 
     @Override

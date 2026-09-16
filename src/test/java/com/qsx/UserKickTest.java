@@ -46,7 +46,7 @@ class UserKickTest extends BaseIntegrationTest {
 
         // 被踢者 refresh 续期失败
         MvcResult refreshResult = postJson("/auth/refresh",
-                Map.of("userId", target.userId(), "refreshToken", target.refreshToken()));
+                Map.of("refreshToken", target.refreshToken()));
         assertThat(objectMapper.readTree(refreshResult.getResponse().getContentAsString()).path("code").asInt())
                 .isEqualTo(1019);
 
@@ -137,7 +137,7 @@ class UserKickTest extends BaseIntegrationTest {
                 .isEqualTo(1003);
         // refresh 被拒（实时查 status 兜底）
         MvcResult refresh = postJson("/auth/refresh",
-                Map.of("userId", target.userId(), "refreshToken", target.refreshToken()));
+                Map.of("refreshToken", target.refreshToken()));
         assertThat(objectMapper.readTree(refresh.getResponse().getContentAsString()).path("code").asInt())
                 .isEqualTo(1019);
 
@@ -200,9 +200,9 @@ class UserKickTest extends BaseIntegrationTest {
                         .header("Authorization", bearerHeader(admin.token())))
                 .andExpect(status().isOk());
 
-        // refresh 会话 key 已被删除；refresh 亦因用户被删而拒绝
+        // 会话已被清理，且 refresh 亦因用户被删而拒绝
         MvcResult refresh = postJson("/auth/refresh",
-                Map.of("userId", targetId, "refreshToken", target.refreshToken()));
+                Map.of("refreshToken", target.refreshToken()));
         assertThat(objectMapper.readTree(refresh.getResponse().getContentAsString()).path("code").asInt())
                 .isEqualTo(1019);
     }
