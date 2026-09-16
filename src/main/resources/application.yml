@@ -63,6 +63,15 @@ qsx:
     enabled: true
     # 缓存兜底 TTL（主动失效优先，TTL 仅兜底）
     ttl: 30m
+  # 双 token 会话配置（Redis 为令牌有效性的唯一真相源）
+  auth:
+    session:
+      # access token 有效期（qsx:auth:at:* 的 TTL），过期后前端应静默刷新
+      at-ttl: 30m
+      # refresh token 与会话 Hash 的有效期，每次刷新滑动续期
+      rt-ttl: 7d
+      # 自首次登录起的会话绝对上限，轮换不重置，超限强制重新登录
+      max-lifetime: 30d
 
 # 打印启动信息
 logging:
