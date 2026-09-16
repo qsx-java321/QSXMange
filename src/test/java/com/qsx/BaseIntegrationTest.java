@@ -75,25 +75,41 @@ public abstract class BaseIntegrationTest {
             AuthRedisKeys.RT_PREFIX,
             AuthRedisKeys.SESSION_PREFIX);
 
+    /** 测试用户邮箱特征（uniqueEmail 生成），用于把测试数据与预置种子数据隔离 */
+    private static final String TEST_EMAIL_LIKE = "%@test.com%";
+
     /** 登录会话（token / refreshToken / userId / email） */
     protected record LoginSession(String token, String refreshToken, Long userId, String email) {
     }
 
     @BeforeEach
     void cleanDatabase() {
-        // 物理清空用户与用户-角色关联，保证用例隔离（角色/权限为常驻种子数据，不清理）。
-        // 注意：不能用 userMapper.delete(null)——MyBatis-Plus 对带 @TableLogic 的实体
-        // 会执行逻辑删除（UPDATE deleted=1），既不隔离用例、又污染预置数据。
-        jdbcTemplate.update("DELETE FROM sys_user_role");
-        jdbcTemplate.update("DELETE FROM sys_user");
+        cleanTestUsers();
         cleanPermissionCache();
     }
 
     @AfterEach
     void tearDown() {
-        jdbcTemplate.update("DELETE FROM sys_user_role");
-        jdbcTemplate.update("DELETE FROM sys_user");
+        cleanTestUsers();
         cleanPermissionCache();
+    }
+
+    /**
+     * 清理测试用户（角色/权限/预置超管为常驻种子数据，不清理）。
+     *
+     * 两点必须注意：
+     * 1. 不能用 userMapper.delete(null)——MyBatis-Plus 对带 @TableLogic 的实体
+     *    会执行逻辑删除（UPDATE deleted=1），既不隔离用例、又污染预置数据；
+     * 2. **只能删测试用户**：早期实现是 `DELETE FROM sys_user` 全表物理删除，
+     *    会把预置超管 admin@qsx.com 一并删掉，导致「跑一次 mvn test 就要手工恢复一次 admin」
+     *    反复发生。测试用户邮箱统一来自 uniqueEmail()（以 @test.com 结尾），据此隔离；
+     *    带尾部通配符是为了覆盖被逻辑删除的测试用户——其邮箱会被改写成
+     *    {@code xxx@test.com#deleted_<时间戳>}。
+     */
+    private void cleanTestUsers() {
+        jdbcTemplate.update("DELETE ur FROM sys_user_role ur "
+                + "JOIN sys_user u ON ur.user_id = u.id WHERE u.email LIKE ?", TEST_EMAIL_LIKE);
+        jdbcTemplate.update("DELETE FROM sys_user WHERE email LIKE ?", TEST_EMAIL_LIKE);
     }
 
     /**

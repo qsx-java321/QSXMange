@@ -1,158 +1,169 @@
-# QSXManager 业务功能测试报告
+# QSXManager 双 Token 会话机制改造 — 测试报告
 
 ## 概述
 
 | 项 | 值 |
 |------|------|
-| 测试时间 | 2026-09-12 19:08（本地时区 Asia/Shanghai） |
-| 被测系统 | QSXManager 后台管理系统（Spring Boot 3.5.16 / Java 21 / MyBatis-Plus / Spring Security + JWT） |
+| 测试时间 | 2026-09-16 23:20（本地时区 Asia/Shanghai） |
+| 被测系统 | QSXManager 后台管理系统（Spring Boot 3.5.16 / Java 21 / MyBatis-Plus / Spring Security + **Redis 有状态双 token**） |
+| 本次改造 | 无状态 JWT access token → Redis 为唯一真相源的随机串双 token（已移除 jjwt 依赖） |
 | 数据库 | MySQL 8.4（本地 Docker，`localhost:3306/QSXManager`） |
-| 缓存 | Redis 7.4.9（本地 Docker，`localhost:6379`，RBAC 权限缓存） |
+| 缓存 | Redis 7.4.9（本地 Docker，`localhost:6379`）—— 改造后为认证链路**硬依赖** |
 | 应用地址 | `http://localhost:8080` |
 | 测试方式 | ① 自动化集成测试 `mvn test`（MockMvc + 真实 MySQL/Redis） ② 真实 HTTP 调用（启动应用逐接口调用，记录请求与响应） |
 
 **测试结果总览**
 
-- 自动化集成测试：**66 个用例，全部通过（Failures: 0, Errors: 0）**
-- 真实 HTTP 接口调用：**38 次调用**，业务接口全部按预期返回；覆盖认证中心、用户、角色、权限、菜单、日志、Excel 导入导出及 401/403 边界
-- 权限管理设计审查：**通过**（详见下节）
+- 自动化集成测试：**109 个用例，全部通过（Failures: 0, Errors: 0, Skipped: 0）**，较改造前基线 88 例新增 21 例
+- 真实 HTTP 端到端：**8 组场景全部符合预期**，含踢下线即时生效、刷新轮换、并发防双花、改密强制重登、禁用即时生效、保护规则、401/403 边界
+- Redis 三键（at / rt / session）实测形态、TTL、字段与设计规格一致
 
 ---
 
-## 一、权限管理设计审查结论
+## 一、改造目标与验收结论
 
-逐项核对后未发现问题，设计闭环完整：
+| 目标（需求编号） | 验收方式 | 结论 |
+|------|------|------|
+| FR-1 登录签发双 token，响应字段名不变 | HTTP：登录返回 `token`/`refreshToken`/`userId`/`roles`/`permissions` | ✅ 通过（permissions 29 项） |
+| FR-2 每请求 AT 校验（Redis 反查身份） | HTTP：有效 AT 200；删除 at 键后同一 AT 立即 401 | ✅ 通过 |
+| FR-3 刷新仅凭 `{refreshToken}`，旧 rt 一经使用即失效 | HTTP + 用例：轮换后旧 AT 401、旧 RT 1019 | ✅ 通过 |
+| FR-4 登出后 AT 立即失效 | 用例：登出后旧 AT 401 且三键清空 | ✅ 通过 |
+| FR-5 管理员踢人即时生效 | HTTP：踢人后目标旧 AT 立即 401（改造前仍可用满 30 分钟） | ✅ 通过 |
+| FR-6 禁用即时生效（含会话清理） | HTTP + 用例：禁用后旧 AT 401 且 session 键已清 | ✅ 通过 |
+| FR-7 删除用户联动清理会话 | 用例：删除后三键清空、旧 AT 401 | ✅ 通过 |
+| FR-8 单端登录：新登录覆盖旧会话 | 用例：二次登录后第一对 AT/RT 全部失效 | ✅ 通过 |
+| FR-9 30 天绝对上限（轮换不续命） | 用例：篡改 `firstLoginTs` 后刷新 1019 且三键清空 | ✅ 通过 |
+| D5 严格轮换（无服务端宽限窗口） | HTTP 并发：同一 rt 并发刷新**恰好一个 200、一个 1019** | ✅ 通过 |
+| 保护规则语义不变 | HTTP + 用例：踢自己 1022、禁用自己 1022、内置超管 1020/1021 | ✅ 通过 |
+| 数据库零变更 | `sql/init.sql` 与表结构未改动 | ✅ 通过 |
 
-| 审查项 | 结论 |
+---
+
+## 二、自动化集成测试（`mvn test`：109/109 通过）
+
+| 测试类 | 用例数 | 覆盖范围 |
+|------|------|------|
+| `SessionLuaTest` | 13 | **会话层（直连 Redis）**：三键形态与 TTL、单端覆盖、轮换失效、重放拒绝、双保险比对、绝对上限、会话字段缺失容错、**并发双花**、**rotate 与 remove 并发后会话必不残留**、Lua 参数守卫 |
+| `AuthSessionTest` | 6 | **会话生命周期（HTTP）**：登出/禁用/删除后旧 AT 立即 401 且三键清空、普通编辑不误踢、改密强制重登、改邮箱令牌仍可用、再次登录覆盖 |
+| `SecurityAccessTest` | 6 | 401 边界、匿名放行、伪造令牌、**已吊销令牌立即 401**、AT 键 TTL 接线 |
+| `AuthRefreshTest` | 11 | 刷新轮换、旧 AT 失效、未知/畸形令牌区分、用户不存在与禁用分支、登出失效、绝对上限、单端登录 |
+| `UserKickTest` | 9 | 踢人（含旧 AT 立即 401 + 键断言）、禁用/解冻流程、删除联动、1020/1021/1022 保护 |
+| `AuthControllerTest` | 12 | 注册 / 登录 / 当前用户 / 修改密码 |
+| `UserControllerTest` | 15 | 用户 CRUD、唯一邮箱、逻辑删除释放邮箱、分页筛选 |
+| `RbacTest` | 5 | 角色与权限 CRUD、分配、ADMIN 保护、整表替换 |
+| `MenuTest` | 8 | 菜单树、防环、有子节点禁删、标识唯一 |
+| `LogTest` | 6 | 操作日志分页 / 删除 / 清空 |
+| `UserImportExportTest` | 9 | 模板下载 / 导入整批拒绝 / 导出 |
+| `RbacCacheTest` + `RbacCacheDisabledTest` | 6 | 权限缓存回填、防穿透、变更即时失效、删除角色/权限/改标识后的失效回归、开关降级 |
+| `BusinessFlowTest` | 3 | 认证→授权→业务 全链路 |
+
+> 关键用例的**有效性**经过反向验证：临时移除「禁用分支的会话清理」后，`AuthSessionTest` 精确失败在 Redis 键存在性断言上——说明断言确实锁住了新能力，而非被每请求查库的 `isEnabled()` 兜底掩盖。
+
+---
+
+## 三、真实 HTTP 端到端明细
+
+> 以下 `<at>` / `<rt>` 均为 64 位 hex 随机串前 16 位（改造后不再有 JWT 结构）。
+
+### 3.1 登录签发与 Redis 三键
+
+| 操作 | 携带信息 | 返回信息 |
+|------|------|------|
+| `POST /auth/login` | `{"email":"admin@qsx.com","password":"admin123"}` | HTTP 200 `{"code":200,"data":{"token":"5896116ff07ac8b8…","refreshToken":"5333f954cfbc42e6…","userId":527,"roles":["ADMIN"],"permissions":[29 项]}}` |
+| Redis 实测 | `qsx:auth:at:{at}` | TTL=**1800s**，value=`527` |
+| Redis 实测 | `qsx:auth:rt:{rt}` | TTL=**604800s**，value=`527` |
+| Redis 实测 | `qsx:auth:session:{userId}` | TTL=**604800s**，fields=`accessToken,refreshToken,firstLoginTs` |
+| `GET /auth/me` | `Bearer <at>` | HTTP 200 `{"code":200,"data":{"email":"admin@qsx.com"}}` |
+
+### 3.2 踢下线即时生效（本次改造核心）
+
+| 操作 | 携带信息 | 返回信息 |
+|------|------|------|
+| 注册+登录普通用户 | `u…@test.com / abc123` | code=200，userId=528，roles=[] |
+| `GET /auth/me`（被踢前） | `Bearer <用户 at>` | HTTP 200 |
+| `POST /api/users/528/kick` | `Bearer <超管 at>` | code=200 |
+| `GET /auth/me`（被踢后，**同一个 at**） | `Bearer <用户 at>` | **HTTP 401** ← 改造前此处仍为 200，直到令牌自然过期 |
+| `POST /auth/refresh` | `{"refreshToken":"<用户 rt>"}` | code=1019 |
+| Redis 实测 | `EXISTS qsx:auth:session:528` | **0**（会话已被清理，非仅靠查库兜底） |
+
+### 3.3 刷新轮换
+
+| 操作 | 携带信息 | 返回信息 |
+|------|------|------|
+| `POST /auth/refresh` | `{"refreshToken":"<rt>"}`（**入参已无 userId**） | code=200，返回新 `token` 与 `refreshToken` |
+| `GET /auth/me`（新 at） | `Bearer <新 at>` | HTTP 200 |
+| `GET /auth/me`（轮换前旧 at） | `Bearer <旧 at>` | **HTTP 401** ← 旧 AT 随轮换立即失效 |
+| `POST /auth/refresh`（重放旧 rt） | `{"refreshToken":"<旧 rt>"}` | code=1019 |
+
+### 3.4 并发刷新（防双花）
+
+| 操作 | 返回信息 |
 |------|------|
-| 权限码一致性 | `PermissionConstants` 22 个权限码与 `init.sql` 预置 22 个按钮权限一一对应（用户 8 / 角色 6 / 权限 2 / 菜单 4 / 日志 2），另有 6 个菜单码，共 28 条 |
-| 超管模型 | ADMIN 角色通过 `INSERT ... SELECT` 绑定全量权限实现，非 `hasRole('ADMIN')` 硬编码放行 |
-| 权限表只读 | `sys_permission` 无写接口，权限码变更走 `init.sql` |
-| 整表替换授权 | 用户-角色、角色-权限均先物理删旧关联再批量插新（本次已补事务原子性） |
-| 菜单树 | 菜单/按钮共用 `sys_permission`（`type` 区分），`parent_id` 自关联，防环校验 + 有子节点禁删 |
-| 缓存链路 | 权限码 Redis 缓存（key=`qsx:auth:perm:{userId}`），未命中回源 MySQL 并回填；权限变更在事务提交后（AFTER_COMMIT）失效，实测变更即时生效 |
-| 降级 | Redis 不可用时自动回源 MySQL，业务不中断；`qsx.rbac-cache.enabled=false` 可一键关闭缓存 |
+| 同一 refresh token 并发两次 `POST /auth/refresh` | code=**1019** 与 code=**200** ← 恰好一个成功、一个被拒（Lua 原子性 + 严格轮换） |
 
----
+### 3.5 改密强制重新登录
 
-## 二、自动化集成测试（`mvn test`：66/66 通过）
+| 操作 | 携带信息 | 返回信息 |
+|------|------|------|
+| `POST /auth/change-password` | `Bearer <at>`；`{"oldPassword":"abc123","newPassword":"abc124"}` | code=200 |
+| `GET /auth/me`（改密前的 at） | `Bearer <旧 at>` | **HTTP 401** |
+| `POST /auth/refresh`（改密前的 rt） | `{"refreshToken":"<旧 rt>"}` | code=1019 |
+| `POST /auth/login`（新密码） | `{"email":"u…@test.com","password":"abc124"}` | code=200 |
 
-| 测试类 | 覆盖范围 |
+### 3.6 禁用即时生效
+
+| 操作 | 携带信息 | 返回信息 |
+|------|------|------|
+| `PUT /api/users/528` | `Bearer <超管 at>`；`{"email":"u…@test.com","status":1}` | code=200 |
+| `GET /auth/me`（被禁用的 at） | `Bearer <用户 at>` | **HTTP 401** |
+| Redis 实测 | `EXISTS qsx:auth:session:528` | **0**（会话已清） |
+
+### 3.7 保护规则与边界
+
+| 操作 | 携带信息 | 返回信息 |
+|------|------|------|
+| `POST /api/users/527/kick`（踢自己） | `Bearer <超管 at>` | code=1022 |
+| `PUT /api/users/527` `status=1`（禁用自己） | `Bearer <超管 at>` | code=1022 |
+| `POST /auth/refresh` `{"refreshToken":"forged-not-hex"}` | 无认证 | code=**400**（形态非法，不打 Redis） |
+| `POST /auth/refresh` `{"refreshToken":"<64 位 hex 未签发>"}` | 无认证 | code=**1019** |
+| `GET /api/users` | 无认证 | HTTP 401 |
+| `GET /api/users` | `Bearer <无 user:page 权限的普通用户>` | HTTP 403 |
+| `GET /api/menus/current` | `Bearer <无角色普通用户>` | HTTP 200 `data=[]` |
+
+### 3.8 旧 schema 残留
+
+| 项 | 值 |
 |------|------|
-| `AuthControllerTest` | 注册 / 登录 / 当前用户 / 修改密码 |
-| `RbacTest` | 角色与权限的 CRUD、分配、ADMIN 保护、整表替换 |
-| `MenuTest` | 菜单树、防环、有子节点禁删、标识唯一 |
-| `SecurityAccessTest` | 401 / 403 / 越权边界 |
-| `BusinessFlowTest` | 认证→授权→业务 全链路 |
-| `UserControllerTest` | 用户 CRUD、唯一邮箱、逻辑删除释放邮箱 |
-| `LogTest` | 操作日志分页 / 删除 / 清空 |
-| `UserImportExportTest` | 模板下载 / 导入（整批校验整体拒绝）/ 导出（9 用例） |
-| `RbacCacheTest` + `RbacCacheDisabledTest` | 权限缓存回填、空权限防穿透、变更即时失效、开关降级 |
+| `qsx:auth:refresh:*`（改造前 schema） | 0 个键——改造后无任何代码读取，若有残留也只会等 TTL 自然过期 |
+| `qsx:auth:*` 键总数 | 5（当前存活会话的三键 + 轮换途中令牌） |
 
 ---
 
-## 三、真实 HTTP 接口测试明细
+## 四、实施中发现并修正的问题
 
-> 说明：`<admin-token>` = 登录 `admin@qsx.com / admin123` 返回的 JWT；`<user-token>` = 登录测试用户返回的 JWT。Token 完整值见 `docs/test/api-test-results.json`，下表展示摘要（`eyJhbGciOiJIUzM4NCJ9...`）。
+| # | 问题 | 影响 | 处理 |
+|------|------|------|------|
+| 1 | `HGETALL` + 字段访问在 Redis Lua（RESP2）中无效——返回的是数组而非 map，`t.accessToken` 恒为 nil | **「即时踢下线」会静默失效**：`remove` 永远删不掉 AT 键，而测试因每请求查库的 `isEnabled()` 兜底仍会通过 | 改为逐字段 `HGET`，并在脚本注释中写明原因 |
+| 2 | `StringRedisTemplate` 的脚本参数会被 `StringRedisSerializer` 硬 `checkcast String` | 传 `Long`/`Integer` 会在触达 Redis 前抛 `ClassCastException` → **登录全线 500** | 全部 ARGV 以字符串传入（已用 `javap` 核实字节码） |
+| 3 | 刷新采用「先轮换、失败再补偿删除」时序 | 数据库抖动会烧掉用户有效会话（全体被迫重登）；补偿删除还会误删并发建立的新会话 | 改为「只读反查 → 查库 → 原子轮换」，**不做任何补偿** |
+| 4 | 测试基类 `DELETE FROM sys_user` 全表物理删除 | 每次 `mvn test` 都会删掉预置超管 `admin@qsx.com`，需反复手工恢复（历史已多次发生） | 改为仅删测试用户（`email LIKE '%@test.com%'`），种子数据存活；并修正 `page_all` 依赖「库里只有测试用户」的绝对计数断言为相对增量断言 |
+| 5 | 令牌形态校验引入后，畸形令牌语义变化 | 原用例用 `forged-token-value` 断言 1019，实际会返回 400 | 用例拆分为「形态非法 400」与「形态合法但未签发 1019」两条 |
 
-### 3.1 认证中心
+### 观察项（本次未处理，留待后续）
 
-| 接口 | 携带信息 | 返回信息 |
-|------|------|------|
-| `POST /auth/register` | 无认证；Body `{"email":"t_report_...@test.com","password":"abc123","nickname":"报告测试用户"}` | HTTP 200 `{"code":200,"message":"操作成功","data":null}` |
-| `POST /auth/login`（超管） | 无认证；Body `{"email":"admin@qsx.com","password":"admin123"}` | HTTP 200 `{"code":200,"data":{"token":"eyJhbGciOiJIUzM4NCJ9...","userId":1,"email":"admin@qsx.com","nickname":"超级管理员","roles":["ADMIN"],"permissions":[28 个权限码]}}` |
-| `POST /auth/login`（测试用户） | 无认证；Body `{"email":"t_report_...@test.com","password":"abc123"}` | HTTP 200 `{"code":200,"data":{"token":"...","userId":98,"roles":[],"permissions":[]}}` |
-| `GET /auth/me` | `Authorization: Bearer <user-token>` | HTTP 200 `{"code":200,"data":{"id":98,"email":"...","nickname":"报告测试用户","status":0,...}}` |
-| `POST /auth/change-password`（改） | `Bearer <user-token>`；Body `{"oldPassword":"abc123","newPassword":"abc124"}` | HTTP 200 `{"code":200,"message":"操作成功","data":null}` |
-| `POST /auth/change-password`（改回） | `Bearer <user-token>`；Body `{"oldPassword":"abc124","newPassword":"abc123"}` | HTTP 200 `{"code":200,"message":"操作成功","data":null}` |
-
-### 3.2 用户管理
-
-| 接口 | 携带信息 | 返回信息 |
-|------|------|------|
-| `GET /api/users?pageNum=1&pageSize=5` | `Authorization: Bearer <admin-token>` | HTTP 200 `{"code":200,"data":{"records":[测试用户、admin 两行],"total":2,"pages":1}}` |
-| `POST /api/users` | `Bearer <admin-token>`；Body `{"email":"t_report_u1_...@test.com","password":"abc123","nickname":"新增测试用户"}` | HTTP 200 `{"code":200,"data":{"id":99,"email":"...","nickname":"新增测试用户","status":0}}` |
-| `GET /api/users/99` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"data":{"id":99,"nickname":"新增测试用户","status":0}}` |
-| `PUT /api/users/99` | `Bearer <admin-token>`；Body `{"email":"...","nickname":"改后昵称","status":0}` | HTTP 200 `{"code":200,"data":{"id":99,"nickname":"改后昵称","status":0}}` |
-| `PUT /api/users/99/roles` | `Bearer <admin-token>`；Body `{"roleIds":[1]}`（绑定 ADMIN） | HTTP 200 `{"code":200,"message":"操作成功","data":null}` |
-| `DELETE /api/users/99` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"message":"操作成功","data":null}`（逻辑删除并释放邮箱） |
-
-### 3.3 角色管理
-
-| 接口 | 携带信息 | 返回信息 |
-|------|------|------|
-| `GET /api/roles?pageNum=1&pageSize=5` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"data":{"records":[ADMIN 角色],"total":1}}` |
-| `GET /api/roles/all` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"data":[{"id":1,"code":"ADMIN","name":"超级管理员","status":0}]}` |
-| `GET /api/roles/1` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"data":{"id":1,"code":"ADMIN","permissionIds":[28 个权限 ID]}}` |
-| `POST /api/roles` | `Bearer <admin-token>`；Body `{"code":"TEST_ROLE_...","name":"测试角色","description":"报告测试用","status":0}` | HTTP 200 `{"code":200,"data":{"id":8,"code":"TEST_ROLE_...","name":"测试角色","status":0}}` |
-| `PUT /api/roles/8` | `Bearer <admin-token>`；Body `{"code":"TEST_ROLE_...","name":"测试角色改","description":"改","status":0}` | HTTP 200 `{"code":200,"data":{"id":8,"name":"测试角色改"}}` |
-| `PUT /api/roles/8/permissions` | `Bearer <admin-token>`；Body `{"permissionIds":[7,8]}`（role:page / role:get） | HTTP 200 `{"code":200,"message":"操作成功","data":null}` |
-| `DELETE /api/roles/8` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"message":"操作成功","data":null}`（先清关联再逻辑删除） |
-
-### 3.4 权限管理（只读）
-
-| 接口 | 携带信息 | 返回信息 |
-|------|------|------|
-| `GET /api/permissions?pageNum=1&pageSize=5` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"data":{"records":[system 菜单、system-user 等 5 条],"total":28,"pages":6}}` |
-| `GET /api/permissions/all` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"data":[28 条权限（6 菜单 + 22 按钮），按 sort 排序]}` |
-| `GET /api/permissions/1` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"data":{"id":1,"code":"system","name":"系统管理","type":"MENU","parentId":0}}` |
-
-### 3.5 菜单管理
-
-| 接口 | 携带信息 | 返回信息 |
-|------|------|------|
-| `GET /api/menus/tree` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"data":[system 下挂 system-user/system-role/system-perm/system-menu/system-log 5 个子菜单，各含按钮权限叶子]}` |
-| `GET /api/menus/current`（我的菜单） | `Bearer <user-token>`（无角色用户） | HTTP 200 `{"code":200,"data":[]}`（按权限过滤 + 补祖先链，无权限返回空树） |
-| `POST /api/menus` | `Bearer <admin-token>`；Body `{"code":"test-menu-...","name":"测试菜单","type":"MENU","parentId":0,"path":"/test","component":"test/index","visible":1,"sort":99}` | HTTP 200 `{"code":200,"data":{"id":38,"code":"test-menu-...","type":"MENU","parentId":0}}` |
-| `PUT /api/menus/38` | `Bearer <admin-token>`；Body `{"code":"test-menu-...","name":"测试菜单改","type":"MENU","parentId":0,"visible":1,"sort":99}` | HTTP 200 `{"code":200,"data":{"id":38,"name":"测试菜单改"}}` |
-| `DELETE /api/menus/38` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"message":"操作成功","data":null}`（无子节点，删除并清理角色-权限关联） |
-
-### 3.6 操作日志
-
-| 接口 | 携带信息 | 返回信息 |
-|------|------|------|
-| `GET /api/logs?pageNum=1&pageSize=5` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"data":{"records":[{id:364,username:"admin@qsx.com",method:"DELETE",url:"/api/menus/38",success:1,...}],"total":..."}}`（AOP 切面已异步落库本测试全部调用） |
-| `DELETE /api/logs/364` | `Bearer <admin-token>` | HTTP 200 `{"code":200,"message":"操作成功","data":null}`（物理删除单条） |
-
-### 3.7 Excel 导入导出
-
-| 接口 | 携带信息 | 返回信息 |
-|------|------|------|
-| `GET /api/users/import/template` | `Bearer <admin-token>` | HTTP 200；`Content-Type: application/vnd...spreadsheetml.sheet`、`Content-Disposition: attachment; filename=user_import_template.xlsx`、文件 3704 字节 |
-| `GET /api/users/export` | `Bearer <admin-token>` | HTTP 200；`filename=users_20260912190817.xlsx`、文件 3890 字节（含邮箱/昵称/状态/角色编码/创建时间） |
-| `POST /api/users/import`（非法文件） | `Bearer <admin-token>`；multipart `file=invalid-xxx.xlsx` | HTTP 200 `{"code":1017,"message":"Excel 文件解析失败，请检查文件内容：No valid entries or contents found..."}` |
-| `POST /api/users/import`（导出文件回导） | `Bearer <admin-token>`；multipart `file=export-xxx.xlsx` | HTTP 200 `{"code":1017,"message":"导入数据校验失败","data":{"successCount":0,"errors":["第 2 行：邮箱已存在：...","第 2 行：状态只能为 0(正常) 或 1(禁用)",...]}}`（整批校验整体拒绝，返回全部错误行明细） |
-
-> 注：导入成功路径由自动化测试 `UserImportExportTest`（9 用例）覆盖；真实调用刻意演示了「整批拒绝 + 错误明细」与「导出文件与导入模板列格式差异（导出状态列为中文"正常/禁用"，导入要求 0/1）」的行为。
-
-### 3.8 认证/授权边界
-
-| 接口 | 携带信息 | 返回信息 |
-|------|------|------|
-| `GET /api/users?pageNum=1&pageSize=5`（未登录） | 无任何认证信息 | HTTP 401 `{"code":401,"message":"未登录或登录已过期","data":null}` |
-| `GET /api/users?pageNum=1&pageSize=5`（越权） | `Bearer <user-token>`（无 user:page 权限的普通用户） | HTTP 403 `{"code":403,"message":"没有操作权限","data":null}` |
-
----
-
-## 四、测试中发现并处理的问题
-
-| 问题 | 根因 | 处理 |
-|------|------|------|
-| 预置中文乱码（admin 昵称"超级管理员"、菜单/权限名显示为 mojibake） | 历史某次 `init.sql` 导入未指定 `--default-character-set=utf8mb4`（见 `docs/dev-env/组件依赖README.md` 警告），UTF-8 字节被误转 | 已按 `init.sql` 字面量执行 `UPDATE` 修复 30 处预置中文（用户 1 / 角色 1 / 权限 28），并清空相关权限缓存 |
-| admin 账号登录报「邮箱或密码错误」 | 自动化测试基类 `@BeforeEach/@AfterEach` 对 `sys_user` 全表逻辑删除，预置 admin 被一并置 `deleted=1` | 已恢复 `deleted=0` 并重建 admin↔ADMIN 角色关联，清空其权限缓存 |
-| 历史测试残留数据（逻辑删除用户、测试角色/菜单） | 自动化测试长期复用本地库产生 | 已物理清理测试残留数据，仅保留预置 admin/ADMIN/28 权限 |
-
-> 以上均为**数据/测试环境问题**，非业务代码缺陷；代码层面未发现需修复项。
+- `GET /auth/login`（方法不允许）触发 `HttpRequestMethodNotSupportedException`，落入兜底处理器返回 code=500 **且不记录操作日志**——同类还有畸形 JSON、超长上传、404 等；属既有行为，非本次改造引入。
+- `RestAuthenticationEntryPoint` 对每个 401 都异步写一条操作日志：Redis 故障时 100% 请求 401，会放大为每请求一次写库（既有行为，改造后放大）。
+- `/auth/logout` 未在白名单内，Redis 故障期间用户无法登出（fail-closed 的必然结果）。
 
 ---
 
 ## 五、结论
 
-- 认证中心、用户/角色/权限/菜单管理、操作日志、Excel 导入导出共 **36 项业务接口**真实调用全部按预期返回（200/401/403 语义正确，业务码 1017 等与设计一致）。
-- 权限管理设计（权限码模型、超管绑定、整表替换、菜单树、缓存一致性）审查通过。
-- RBAC 权限缓存（Redis）实测生效：登录回填、无权限 401/403 边界正确、导入整批校验与错误明细完整、日志切面全量异步落库。
-- 自动化集成测试 66/66 通过，与真实 HTTP 测试结果互相印证。
+- 认证体系已从「无状态 JWT + Redis 哈希型 refresh token」切换为「Redis 为唯一真相源的随机串双 token」，**登出 / 踢人 / 禁用 / 删除 / 改密后旧 access token 立即失效**，根治了改造前最长 30 分钟的踢人残留窗口。
+- 顺带消除一个既有竞态：改造前刷新是「GET → 改 → SET」的非原子读改写，一次与踢人并发的刷新会把刚被踢掉的会话重新写回并续上新的 7 天 TTL；Lua 原子化后该缺陷消失，并有并发回归用例锁住。
+- 自动化用例 109/109 通过；真实 HTTP 端到端 8 组场景与自动化结果互相印证；数据库结构零变更；RBAC、操作日志、Excel 等模块不受影响（全量回归通过）。
+- **运维注意**：Redis 已成为认证链路硬依赖，故障即全员 401 且无法登录；已补 `timeout: 2s` / `connect-timeout: 1s`，建议补充 Redis 监控告警与可用性方案。上线瞬间旧 JWT 全部失效，全员需重新登录。
 
 ---
 
-*原始请求/响应数据见 `docs/test/api-test-results.json`。*
+*本报告取代 2026-09-12 版（66 用例 / JWT 时代）；历史报告见 `docs/session-notes/` 下各期测试报告。*

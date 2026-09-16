@@ -36,6 +36,10 @@ class UserControllerTest extends BaseIntegrationTest {
     @DisplayName("分页查询全部")
     void page_all() throws Exception {
         String token = adminToken();
+        // 取基线后断言增量：库中可能已有预置种子用户（admin@qsx.com 等），
+        // 断言绝对总数会隐含依赖「库里只有测试用户」这一前提
+        long baseline = totalUsers(token);
+
         createUser(token, uniqueEmail("p1"), "abc123", null);
         createUser(token, uniqueEmail("p2"), "abc123", null);
         createUser(token, uniqueEmail("p3"), "abc123", null);
@@ -47,9 +51,19 @@ class UserControllerTest extends BaseIntegrationTest {
 
         JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
         assertThat(json.path("code").asInt()).isEqualTo(200);
-        // 除 admin 外 3 个 = 4
-        assertThat(json.path("data").path("total").asLong()).isEqualTo(4);
-        assertThat(json.path("data").path("records").size()).isEqualTo(4);
+        long total = json.path("data").path("total").asLong();
+        assertThat(total).isEqualTo(baseline + 3);
+        assertThat(json.path("data").path("records").size()).isEqualTo((int) total);
+    }
+
+    /** 当前用户总数（用于相对断言） */
+    private long totalUsers(String token) throws Exception {
+        MvcResult result = mockMvc.perform(get("/api/users")
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString())
+                .path("data").path("total").asLong();
     }
 
     @Test
