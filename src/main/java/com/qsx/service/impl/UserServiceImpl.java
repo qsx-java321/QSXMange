@@ -192,6 +192,15 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException(ResultCode.USER_NOT_FOUND);
         }
 
+        // 删除保护（与 update/kick 同类保护，避免误删导致失去对系统的掌控）：
+        // 不允许删除自己（自己的账号由自己处理）；内置超管不可删除（与不可禁用/不可强制登出一致）
+        if (id.equals(SecurityUtils.getCurrentUserId())) {
+            throw new BusinessException(ResultCode.CANNOT_OPERATE_SELF);
+        }
+        if (userMapper.selectRoleCodes(id).contains(RoleConstants.ADMIN)) {
+            throw new BusinessException(ResultCode.ADMIN_USER_CANNOT_DELETE);
+        }
+
         // 释放邮箱：在逻辑删除前，将原邮箱拼接删除时间戳后缀，
         // 避免与原邮箱的唯一索引冲突，从而允许同一个邮箱再次注册
         String suffixedEmail = user.getEmail() + DELETED_EMAIL_SUFFIX_PREFIX + System.currentTimeMillis();

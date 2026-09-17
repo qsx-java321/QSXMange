@@ -153,7 +153,7 @@ QSXManager
 | 用户详情 | `GET /api/users/{id}` | `user:get` | |
 | 新增用户 | `POST /api/users` | `user:create` | 需唯一邮箱 |
 | 修改用户 | `PUT /api/users/{id}` | `user:update` | 支持改名、改状态（禁用/解冻）、改邮箱（唯一性校验）；**禁用即踢下线**（清理会话三键）；**禁止禁用自己、禁止禁用内置超管** |
-| 删除用户 | `DELETE /api/users/{id}` | `user:delete` | 逻辑删除并释放邮箱，联动清理会话三键 |
+| 删除用户 | `DELETE /api/users/{id}` | `user:delete` | 逻辑删除并释放邮箱，联动清理会话三键；**不可删除内置超管（1025）、不可删除自己（1022）** |
 | 分配角色 | `PUT /api/users/{id}/roles` | `user:assign-role` | 整表替换用户角色 |
 | 强制登出 | `POST /api/users/{id}/kick` | `user:kick` | 清理目标用户会话三键（踢下线，账号不受影响），**其 access token 立即失效**；**禁止踢自己、禁止踢内置超管** |
 | 下载导入模板 | `GET /api/users/import/template` | `user:import` | 表头：邮箱/昵称/状态/角色编码 |
@@ -250,6 +250,7 @@ QSXManager
 | 1022 | 不允许对自己执行该操作 |
 | 1023 | 菜单或权限标识创建后不可修改 |
 | 1024 | 角色编码创建后不可修改 |
+| 1025 | 内置超管用户不可删除 |
 
 ## 六、快速开始
 

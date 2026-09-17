@@ -1,0 +1,86 @@
+{
+  "meta": {
+    "app": "http://localhost:8080",
+    "date": "2026-09-17",
+    "track": "真实 HTTP 逐接口调用（应用启动态）",
+    "admin": "admin@qsx.com / admin123（内置超管 id=1，ADMIN 角色 id=1）"
+  },
+  "A_auth_session": {
+    "A1_register_ok": {"code": 200, "msg": "操作成功"},
+    "A1_register_dup": {"code": 1001, "msg": "该邮箱已被注册"},
+    "A2_admin_login": {"code": 200, "data_has": ["token", "refreshToken", "userId", "email", "roles:ADMIN", "permissions:29项"]},
+    "A3_login_wrong_pw": {"code": 1002, "msg": "邮箱或密码错误"},
+    "A3_login_disabled": {"code": 1003, "msg": "账号已被禁用"},
+    "A4_me": {"code": 200, "email": "admin@qsx.com"},
+    "A5_refresh_rotate_ok": {"code": 200, "new token/refreshToken issued"},
+    "A5_old_at_after_rotate": {"http": 401, "code": 401},
+    "A5_old_rt_replay": {"code": 1019, "msg": "刷新令牌无效或已过期"},
+    "A6_refresh_missing": {"code": 400, "msg": "刷新令牌不能为空"},
+    "A6_refresh_unknown_hex": {"code": 1019},
+    "A6_refresh_malformed": {"code": 1019},
+    "A7_logout_ok": {"code": 200},
+    "A7_old_at_after_logout": {"http": 401, "code": 401},
+    "A7_old_rt_after_logout": {"code": 1019},
+    "A8_change_password_ok": {"code": 200},
+    "A8_old_at_after_cp": {"http": 401},
+    "A8_old_pw_login": {"code": 1002},
+    "A8_new_pw_login": {"code": 200},
+    "A9_single_login_first_at": {"http": 401},
+    "A9_single_login_first_rt": {"code": 1019},
+    "A9_second_login_ok": {"http": 200, "code": 200},
+    "A10_redis": {
+      "qsx:auth:at:{at}": {"ttl": 1800, "value": "userId"},
+      "qsx:auth:rt:{rt}": {"ttl": 604800, "value": "userId"},
+      "qsx:auth:session:{userId}": {"ttl": 604800, "fields": ["accessToken", "refreshToken", "firstLoginTs"]}
+    }
+  },
+  "B_user_crud": {
+    "B1_page_ok": {"code": 200, "total": 7},
+    "B1_page_email_filter": {"total": 5},
+    "B1_page_status_filter": {"total": 1},
+    "B1_pageSize_0": {"code": 200, "no 500"},
+    "B2_detail_ok": {"code": 200},
+    "B2_detail_notfound": {"code": 1004},
+    "B3_create_ok": {"code": 200, "id": 528},
+    "B3_create_weak_pw": {"code": 400},
+    "B3_create_bad_email": {"code": 400},
+    "B3_create_dup": {"code": 1001},
+    "B4_update_ok": {"code": 200},
+    "B4_update_other_email": {"code": 1001},
+    "B4_update_notfound": {"code": 1004},
+    "B5_normal_edit_keeps_session": {"edit": 200, "self_me_after": {"http": 200}, "session_key_exists": 1},
+    "B6_delete_ok": {"code": 200},
+    "B6_page_email_gone": {"total": 0},
+    "B6_target_at_after_delete": {"http": 401},
+    "B6_target_rt_after_delete": {"code": 1019},
+    "B6_session_key_gone": 0,
+    "B6_at_key_gone": 0,
+    "B6_same_email_re_register": {"code": 200}
+  },
+  "C_roles": {
+    "create_role": {"code": 200},
+    "assign_permission_user_page": {"code": 200, "permId": 6},
+    "C1_assign_role_ok": {"code": 200},
+    "C1_access_users_with_role": {"http": 200},
+    "C2_clear_roles_ok": {"code": 200, "roleIds": []},
+    "C2_access_users_after_clear": {"http": 403},
+    "C2_session_key_still": 1,
+    "C3_assign_to_unknown_user": {"code": 1004},
+    "C3_assign_unknown_role": {"code": 1009}
+  },
+  "D_kick": {
+    "D1_kick_ok": {"code": 200},
+    "D1_target_at_after_kick": {"http": 401},
+    "D1_target_rt_after_kick": {"code": 1019},
+    "D1_relogin_after_kick": {"code": 200, "account not disabled"},
+    "D2_kick_without_perm": {"http": 403}
+  },
+  "E_protection_boundary": {
+    "E1_delete_builtin_admin_by_second_admin": {"code": 1025, "msg": "内置超管用户不可删除"},
+    "E2_delete_self": {"code": 1022, "msg": "不允许对自己执行该操作"},
+    "E3_disable_admin": {"code": 1020, "msg": "内置超管用户不可禁用"},
+    "E3_kick_admin": {"code": 1021, "msg": "内置超管用户不可强制登出"},
+    "E4_no_auth": {"http": 401},
+    "E5_normal_user_no_perm": {"http": 403}
+  }
+}
