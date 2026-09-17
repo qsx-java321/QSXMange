@@ -82,6 +82,21 @@ public class UserServiceImpl implements UserService {
         return status != null && status != 0;
     }
 
+    /**
+     * 目标用户是否持有内置超管角色——<b>身份判定，与授权判定严格区分</b>。
+     *
+     * 必须走 {@code existsRoleCode}（不过滤 sys_role.status），不能用
+     * {@code selectRoleCodes}：后者按 {@code r.status = 0} 过滤，ADMIN 角色一旦被停用
+     * 即返回空集，会让 1020/1021/1025 三条保护<b>同时静默失效</b>——
+     * 停用角色等于反手拆掉超管保护，操作者随后就能删/禁用/踢掉超管账号。
+     *
+     * 这与 {@link #isDisabling} 是同一类教训：判定谓词必须与它要回答的问题同源，
+     * 复用一条为「授权」设计的查询去做「身份」判定，语义错位就会变成保护缺口。
+     */
+    private boolean isBuiltInAdmin(Long userId) {
+        return userMapper.existsRoleCode(userId, RoleConstants.ADMIN);
+    }
+
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
     private final UserRoleMapper userRoleMapper;
@@ -167,7 +182,7 @@ public class UserServiceImpl implements UserService {
             if (id.equals(SecurityUtils.getCurrentUserId())) {
                 throw new BusinessException(ResultCode.CANNOT_OPERATE_SELF);
             }
-            if (userMapper.selectRoleCodes(id).contains(RoleConstants.ADMIN)) {
+            if (isBuiltInAdmin(id)) {
                 throw new BusinessException(ResultCode.ADMIN_USER_CANNOT_DISABLE);
             }
         }
@@ -197,7 +212,7 @@ public class UserServiceImpl implements UserService {
         if (id.equals(SecurityUtils.getCurrentUserId())) {
             throw new BusinessException(ResultCode.CANNOT_OPERATE_SELF);
         }
-        if (userMapper.selectRoleCodes(id).contains(RoleConstants.ADMIN)) {
+        if (isBuiltInAdmin(id)) {
             throw new BusinessException(ResultCode.ADMIN_USER_CANNOT_DELETE);
         }
 
@@ -266,7 +281,7 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException(ResultCode.CANNOT_OPERATE_SELF);
         }
         // 内置超管不可被强制登出，避免误操作导致系统失去掌控
-        if (userMapper.selectRoleCodes(id).contains(RoleConstants.ADMIN)) {
+        if (isBuiltInAdmin(id)) {
             throw new BusinessException(ResultCode.ADMIN_USER_CANNOT_KICK);
         }
         // 清理目标会话（at/rt/session 三键）：旧 access token 立即失效；

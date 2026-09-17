@@ -35,8 +35,17 @@ import java.util.stream.Collectors;
 @Service
 public class RoleServiceImpl implements RoleService {
 
-    /** 内置超管编码，禁止删除 */
+    /** 内置超管编码，禁止删除 / 禁止停用 */
     private static final String BUILT_IN_ADMIN_CODE = "ADMIN";
+
+    /**
+     * 状态「非 0 即停用」。
+     * 必须与权限查询的 {@code r.status = 0} 过滤用同一谓词，否则会出现
+     * 「按 A 谓词停用、按 B 谓词仍授权」的错位。
+     */
+    private static boolean isDisabling(Integer status) {
+        return status != null && status != 0;
+    }
 
     private final RoleMapper roleMapper;
     private final RolePermissionMapper rolePermissionMapper;
@@ -106,6 +115,16 @@ public class RoleServiceImpl implements RoleService {
         if (!request.getCode().equals(role.getCode())) {
             throw new BusinessException(ResultCode.ROLE_CODE_IMMUTABLE);
         }
+
+        // 内置超管角色不可停用：权限查询按 r.status = 0 过滤，停用后所有「仅经 ADMIN 角色
+        // 获得权限」的用户会立即失去全部权限——包括分配权限所需的 role:assign 与 role:update。
+        // 若此时无人持有其它带 role:update 的角色，就再没有人能通过接口把 ADMIN 角色启用回来，
+        // 系统被锁死在「无人可管理权限」的状态，只能直接改库恢复。
+        // 与 delete() 里的「超管角色不可删除」对称：一个防删，一个防停，都是防失控而非防误操作。
+        if (BUILT_IN_ADMIN_CODE.equals(role.getCode()) && isDisabling(request.getStatus())) {
+            throw new BusinessException(ResultCode.ADMIN_ROLE_CANNOT_DISABLE);
+        }
+
         role.setCode(request.getCode());
         role.setName(request.getName());
         role.setDescription(request.getDescription());

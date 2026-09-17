@@ -27,15 +27,37 @@ public interface UserMapper extends BaseMapper<User> {
     int insertBatch(@Param("list") List<User> list);
 
     /**
-     * 查询用户的全部角色码（仅未删除**且未停用**的角色）。
+     * 查询用户的全部角色码（仅未删除**且未停用**的角色）——<b>授权判定专用</b>。
      *
      * 必须过滤 status：角色「停用」的语义就是不再授予权限，
-     * 若此处不过滤，停用只会清缓存、回源结果不变，管理端的停用形同虚设
+     * 若此处不过滤，停用只会清缓存、回源结果不变，管理端的停用形同虚设。
+     *
+     * <b>不要用它做内置身份判定</b>（如「是不是超管」），那是 {@link #existsRoleCode} 的职责。
      */
     @Select("SELECT r.code FROM sys_user_role ur " +
             "JOIN sys_role r ON ur.role_id = r.id " +
             "WHERE ur.user_id = #{userId} AND r.deleted = 0 AND r.status = 0")
     List<String> selectRoleCodes(@Param("userId") Long userId);
+
+    /**
+     * 判断用户是否持有指定角色编码——<b>身份判定专用，刻意不过滤 r.status</b>。
+     *
+     * 与 {@link #selectRoleCodes} 的分工必须严格区分，两者回答的是不同问题：
+     * <ul>
+     *   <li>selectRoleCodes：「该用户<b>实际拥有</b>哪些权限」——按 r.status 过滤是正确语义；</li>
+     *   <li>本方法：「该用户<b>是不是</b>某个内置身份」——身份不因角色被停用而改变，
+     *       因此<b>不能</b>过滤 r.status。</li>
+     * </ul>
+     *
+     * 若身份判定误用 selectRoleCodes：一旦 ADMIN 角色被停用，该查询返回空集，
+     * 「超管不可禁用(1020)/不可强制登出(1021)/不可删除(1025)」三条保护会<b>同时静默失效</b>——
+     * 等于给了操作者一条「先停用超管角色、再处置超管账号」的绕过路径。
+     * 新增 ADMIN 角色停用拦截（1026）是第一道闸，本方法是即使角色已被停用也仍然生效的第二道闸。
+     */
+    @Select("SELECT EXISTS(SELECT 1 FROM sys_user_role ur " +
+            "JOIN sys_role r ON ur.role_id = r.id " +
+            "WHERE ur.user_id = #{userId} AND r.code = #{code} AND r.deleted = 0)")
+    boolean existsRoleCode(@Param("userId") Long userId, @Param("code") String code);
 
     /**
      * 查询用户拥有的全部权限码（经角色-权限关联，仅未删除**且未停用**的角色/未删除权限）

@@ -54,7 +54,8 @@ public enum ResultCode {
     // 标识不可变 (1023 起)：code 是鉴权与菜单过滤的依据，改错会立刻锁死对应接口
     PERMISSION_CODE_IMMUTABLE(1023, "菜单或权限标识创建后不可修改，请新建并重新绑定"),
     ROLE_CODE_IMMUTABLE(1024, "角色编码创建后不可修改，请新建并重新绑定"),
-    ADMIN_USER_CANNOT_DELETE(1025, "内置超管用户不可删除");
+    ADMIN_USER_CANNOT_DELETE(1025, "内置超管用户不可删除"),
+    ADMIN_ROLE_CANNOT_DISABLE(1026, "内置超管角色不可停用");
 
     private final int code;
     private final String message;

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 mvn -o -DskipTests compile        # 快速编译（离线可用）
 mvn spring-boot:run               # 启动，端口 8080
-mvn test                          # 全量测试（115 例）
+mvn test                          # 全量测试（138 例）
 mvn test -Dtest=SessionLuaTest    # 单个测试类
 mvn test -Dtest='SessionLuaTest#rotate_replayOldRefreshToken_rejected'   # 单个方法
 mvn test -Dtest='RbacTest,MenuTest'                                      # 多个类必须加引号
