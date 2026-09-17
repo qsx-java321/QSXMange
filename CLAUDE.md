@@ -83,5 +83,7 @@ docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 <
 
 - `README.md`：技术栈、完整接口表（含权限码）、错误码表、快速开始
 - `docs/design/springboot项目设计.md`：设计规格（含认证流程）
+- `docs/design/用户与会话管理机制说明.md`：用户管理与会话管理的模式、流程、保护矩阵（含代码索引）
 - `docs/test/test-report.md`：当前测试报告（端到端场景与修复记录）
+- `docs/test/用户与会话-真实HTTP测试报告.md`：用户+会话双轨测试专项报告（Maven 130 + 真实 HTTP 逐接口）
 - `docs/session-notes/qsxmanager/`：各阶段会话总结与测试报告；`会话总结-qsxmanager全项目.md` 是主线总览，**含遗留事项清单**
