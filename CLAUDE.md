@@ -40,7 +40,7 @@ docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 <
 
 - 三个多键操作全部走 Lua 原子脚本（`resources/lua/auth_session_*.lua`），实现在 `security/session/AuthSessionServiceImpl`——**改会话行为先读这三个脚本的头部注释**，里面写明了每条约定的原因。
 - 请求链路：`TokenAuthenticationFilter`（Redis 反查 userId）→ `SecurityUserDetailsService.loadUserById`（实时查库 + 权限缓存）→ `isEnabled()` → 写入 SecurityContext。
-- 吊销入口统一为 `AuthSessionService.remove(userId)`，调用点：登出、踢人、禁用、删除用户、改密。**新增用户生命周期变更（如重置密码）必须一并清理会话**，否则旧令牌仍然有效。
+- 吊销入口统一为 `AuthSessionService.remove(userId)`，调用点：登出、踢人、禁用、删除用户、改密。**新增任何涉及账号状态或凭据的用户生命周期变更，必须一并清理会话**，否则旧令牌仍然有效。
 - **fail 策略分级**：会话层 fail-closed（Redis 故障 = 拒绝认证，宁可不放行）；权限缓存 fail-open（Redis 异常降级查库）。两者边界不可混淆。
 
 ### 授权
@@ -86,4 +86,4 @@ docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 <
 - `docs/design/用户与会话管理机制说明.md`：用户管理与会话管理的模式、流程、保护矩阵（含代码索引）
 - `docs/test/test-report.md`：当前测试报告（端到端场景与修复记录）
 - `docs/test/用户与会话-真实HTTP测试报告.md`：用户+会话双轨测试专项报告（Maven 130 + 真实 HTTP 逐接口）
-- `docs/session-notes/qsxmanager/`：各阶段会话总结与测试报告；`会话总结-qsxmanager全项目.md` 是主线总览，**含遗留事项清单**
+- `docs/session-notes/qsxmanager/`：各阶段会话总结与测试报告；`会话总结-qsxmanager全项目.md` 是主线总览（含设计约束与有意取舍）

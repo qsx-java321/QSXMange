@@ -4,7 +4,7 @@
 
   名称: QSXProJect
 
-  定位: 单体单模块、前后端分离的中小型后台管理系统
+  定位: 用户后台管理基础 demo——单体单模块、前后端分离，为其他项目提供可直接复用的认证/授权/用户/会话基座
 
   目标: 提供邮箱密码注册登录、令牌认证（Redis 有状态双 token）、完整RBAC权限、用户/角色/权限管理
 
@@ -146,10 +146,6 @@
 
           职责: 数据库实体，如 User、Role、Permission、UserRole、RolePermission
 
-        - 路径: enums
-
-          职责: 业务枚举，如 UserStatus、RoleStatus、PermissionType
-
         - 路径: base
 
           职责: BaseEntity 等实体基类
@@ -172,9 +168,11 @@
 
         - PermissionService
 
-        - EmailService
+        - PermissionCacheService
 
-        - CaptchaService
+        - OperationLogService
+
+        - UserImportExportService
 
       子包:
 
@@ -220,21 +218,15 @@
 
         - 路径: vo
 
-          职责: 返回前端的视图对象
+          职责: 返回前端的视图对象（Entity → VO 转换用静态工厂 `from(...)`）
 
-    - 路径: converter
+    - 路径: security
 
-      职责: Entity、DTO、VO 转换器，可用 MapStruct
+      职责: Spring Security 配置、令牌认证过滤器、会话三键服务与 Lua 脚本加载、权限加载
 
-    - 路径: infrastructure
+    - 路径: aspect
 
-      职责: 基础设施
-
-      子包:
-
-        - 路径: redis
-
-          职责: Redis 配置与缓存服务
+      职责: 操作日志切面（包级扫描 `web.controller`）
 
   资源目录:
 
@@ -280,8 +272,6 @@
 
       功能:
 
-        - 邮箱验证码发送与校验
-
         - 邮箱 + 密码注册
 
         - 邮箱 + 密码登录
@@ -296,15 +286,13 @@
 
       相关包:
 
-        - security
+        - security.config / security.filter / security.service
+
+        - security.session（Redis 会话三键 + Lua 原子脚本）
+
+        - security.token
 
         - service.AuthService
-
-        - service.EmailService
-
-        - service.CaptchaService
-
-        - infrastructure.redis
 
     - 名称: 用户管理
 
@@ -319,8 +307,6 @@
         - 逻辑删除
 
         - 分配角色
-
-        - 重置密码
 
       相关包:
 
@@ -416,43 +402,13 @@
 
         - 参数校验
 
-        - Redis 缓存
+        - Redis 缓存（权限缓存 + 有状态会话）
 
-        - 登录日志、操作日志可作为后续扩展
-
-  后续可扩展:
-
-    - 字典管理
-
-    - 参数配置
-
-    - 公告通知
-
-    - 文件上传下载
-
-    - 登录日志
-
-    - 操作日志
-
-    - 在线用户
-
-    - 数据权限
-
-    - 定时任务
-
-    - 代码生成
-
-    - 多租户
-
-    - 工作流
-
-    - 具体业务模块
+        - 操作日志（AOP 访问审计，含 401/400 补记）
 
 
 
 核心闭环:
-
-  - 发送邮箱验证码
 
   - 邮箱注册
 
@@ -604,21 +560,9 @@ RBAC模型:
 
     - sys_role_permission
 
-  可选表:
-
-    - sys_login_log
+  审计表:
 
     - sys_operation_log
-
-    - sys_dict_type
-
-    - sys_dict_data
-
-    - sys_config
-
-    - sys_notice
-
-    - sys_file
 
   通用字段:
 
@@ -648,7 +592,7 @@ RBAC模型:
 
   - 4: 建 RBAC 五张核心表与实体、Mapper
 
-  - 5: 完成邮箱验证码、注册、登录、令牌认证、SecurityConfig
+  - 5: 完成注册、登录、令牌认证、SecurityConfig
 
   - 6: 完成当前用户信息、登出、修改密码
 
@@ -658,7 +602,7 @@ RBAC模型:
 
   - 9: 完成权限/菜单树与动态菜单接口
 
-  - 10: 接入 Redis 缓存、登录日志、操作日志
+  - 10: 接入 Redis 缓存（权限缓存 + 有状态会话）、操作日志
 
   - 11: 前端联调，动态路由、按钮权限
 
@@ -678,8 +622,6 @@ RBAC模型:
 
   - 令牌登出、踢人、禁用、改密、权限变更都要配合 Redis（会话三键 + 权限缓存）
 
-  - 邮箱验证码要限流、过期、防刷
-
   - 逻辑删除与邮箱唯一索引要处理冲突
 
   - 权限变更后注意缓存一致性
@@ -690,7 +632,7 @@ RBAC模型:
 
 最终成品:
 
-  描述: 一个可用的中小型前后端分离后台管理系统
+  描述: 用户后台管理基础 demo——一个可用的中小型前后端分离后台管理系统，作为其他项目的基础
 
   管理员可操作:
 
@@ -714,8 +656,8 @@ RBAC模型:
 
     - 修改密码
 
-    - 后续查看日志、字典、配置、公告等
+    - 查看操作日志
 
-  一句话总结: 这套结构可以做出标准 RBAC 后台管理平台，核心是邮箱认证、Redis 有状态令牌会话、用户/角色/权限管理和统一基础设施。
+  一句话总结: 这套结构即标准 RBAC 后台管理基座，核心是邮箱认证、Redis 有状态令牌会话、用户/角色/权限管理和统一基础设施，可直接作为其他项目的基础 demo。
 
 ```
