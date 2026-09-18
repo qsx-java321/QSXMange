@@ -27,7 +27,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 用户管理 & 会话管理 —— 覆盖缺口/疑点专项测试（本次补测）。
  *
- * 背景：用户管理与会话管理已有 115 例集成测试覆盖主干路径；本类只补
+ * 背景：用户管理与会话管理已有集成测试覆盖主干路径；本类只补
  * 尚未被锁定的边界与保护疑点，不改任何生产代码：
  *   1. 创建接口 /api/users 的参数校验（弱密码/非法邮箱/缺邮箱/昵称超长）
  *   2. 分页参数 pageNum/pageSize 越界（UserQuery 无校验，锁定不 500）

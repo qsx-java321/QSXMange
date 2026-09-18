@@ -65,7 +65,7 @@ QSXManager/                              # 父工程（packaging=pom，继承 sp
 ├── qsx-admin/                           # ⑤ 启动器（唯一可执行产物）
 │   ├── src/main/java/com/qsx/QsxProjectApplication.java
 │   ├── src/main/resources/application.yml
-│   └── src/test/java/com/qsx/           #    自动化集成测试（138 例）
+│   └── src/test/java/com/qsx/           #    自动化集成测试（171 例，覆盖 34 个接口）
 ├── sql/init.sql                         # 建表脚本（sys_user + RBAC 四表 + 菜单/权限 + 预置数据）
 └── docs/
 ```
@@ -292,16 +292,20 @@ curl -X POST http://localhost:8080/auth/login \
 ### 5. 运行自动化测试（可选）
 
 ```bash
-mvn test                              # 全量（仅 qsx-admin 有测试，共 138 例）
+mvn test                              # 全量（仅 qsx-admin 有测试，共 171 例）
 mvn test -Dtest=SessionLuaTest        # 单个测试类
 mvn test -Dtest='RbacTest,MenuTest'   # 多个类必须加引号
 ```
 
-测试复用本地 MySQL 的 QSXManager 库与本地 Redis，**两者都必须可用**：认证链路依赖 Redis，Redis 不可用时绝大部分需要登录态的用例会因 401 失败。测试只清理自己创建的测试用户（`*@test.com`），预置超管与种子权限不会被删除。
+测试复用本地 MySQL 的 QSXManager 库与本地 Redis，**两者都必须可用**：认证链路依赖 Redis，Redis 不可用时绝大部分需要登录态的用例会因 401 失败。
+
+测试只清理自己创建的数据——`*@test.com` 测试用户、`test-` 前缀的测试角色/菜单（含逻辑删除行）、两侧关联与操作日志表；预置超管、`ADMIN` 角色与 29 条种子权限不会被删除。**不要在本地应用正服务会话时跑测试**（会清掉在线会话的 Redis 键）。
+
+逐接口的测试结果见 [docs/test/项目测试报告.md](docs/test/项目测试报告.md)（覆盖矩阵 + 171 条真实 HTTP 明细；原始请求/响应见同目录 `项目测试报告.json`）。
 
 ## 七、作为二开基座
 
-本项目定位是**可直接复用的用户后台管理基础 demo**：认证、授权、用户、会话四条主线已完成闭环并有 138 例测试锁定，新业务模块可直接叠加在其上。
+本项目定位是**可直接复用的用户后台管理基础 demo**：认证、授权、用户、会话、角色、权限、菜单、日志八条主线已完成闭环并有 171 例自动化测试锁定，新业务模块可直接叠加在其上。
 
 | 扩展方向 | 起点 |
 |------|------|

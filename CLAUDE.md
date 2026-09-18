@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 mvn -o -DskipTests compile        # 快速编译（离线可用，5 个模块）
 mvn -o -DskipTests package        # 打包（仅 qsx-admin 产出可执行 fat jar）
-mvn test                          # 全量测试（138 例；仅 qsx-admin 有测试）
+mvn test                          # 全量测试（171 例；仅 qsx-admin 有测试）
 mvn test -Dtest=SessionLuaTest    # 单个测试类
 mvn test -Dtest='SessionLuaTest#rotate_replayOldRefreshToken_rejected'   # 单个方法
 mvn test -Dtest='RbacTest,MenuTest'                                      # 多个类必须加引号
@@ -24,7 +24,7 @@ java -jar qsx-admin/target/qsx-admin-1.0.0.jar     # 先 package，再直接跑 
 
 **前置条件**：MySQL 8.4（`localhost:3306/QSXManager`，root/123456）与 Redis 7.4（`localhost:6379`）都在 Docker 中运行，且**两者都必须可用**——认证链路依赖 Redis，Redis 不可用时绝大部分需要登录态的用例会因 401 失败。依赖已缓存后 `-o` 离线可跑。
 
-**测试直接复用本地开发库与开发 Redis**（没有独立测试库）。清理范围：`sys_user` 中 `email LIKE '%@test.com%'` 的测试用户 + Redis 中全部 `qsx:auth:*` 键。因此：**不要在本地应用正服务会话时跑测试**（会清掉在线会话的 Redis 键）。
+**测试直接复用本地开发库与开发 Redis**（没有独立测试库）。清理范围：`sys_user` 中 `email LIKE '%@test.com%'` 的测试用户、`test-%` 前缀的测试角色/菜单（含逻辑删除行）及其两侧关联、全部 `sys_operation_log`、Redis 中全部 `qsx:auth:*` 键。因此：**不要在本地应用正服务会话时跑测试**（会清掉在线会话的 Redis 键）。
 
 初始化/重建数据库（**会清空既有数据**）：
 
@@ -97,15 +97,18 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 - **Lua 写入顺序固定为「先清旧 → 写 session → 写令牌键」**：Lua 报错不回滚，这个顺序保证崩溃时留下的是死令牌（安全）而不是无法吊销的裸令牌。
 - **TTL 一律整数秒且下限为 1**：`SET ... EX 0` 报错而 `EXPIRE key 0` 会直接删键。`AuthSessionProperties` 有启动期校验，纯数字配置会被当作毫秒（`30` 是 30 毫秒，不是 30 天）。
 - **无事务时发布的事件会被静默丢弃**：`@TransactionalEventListener` 默认 `fallbackExecution=false`。给非 `@Transactional` 方法补发失效事件时必须同时加事务，或显式设置 fallback。
-- **测试清理禁用全表删除**：`DELETE FROM sys_user` 会删掉预置超管；`userMapper.delete(null)` 更会因 `@TableLogic` 变成全表逻辑删除。只清测试用户（`email LIKE '%@test.com%'`）。
+- **测试清理禁用全表删除**：`DELETE FROM sys_user` 会删掉预置超管；`userMapper.delete(null)` 更会因 `@TableLogic` 变成全表逻辑删除。只清测试用户（`email LIKE '%@test.com%'`）与 `test-` 前缀的测试角色/菜单。
+- **物理唯一索引 + 逻辑删除 ⇒ 判重必须含已删行**：`uk_role_code` / `uk_perm_code` 都是**不含 `deleted` 列**的唯一索引，而删除是逻辑删除——用 `BaseMapper.selectOne` 判重会被 `@TableLogic` 自动过滤掉已删行，于是「删除后用同一编码新建」通过校验、在 INSERT 时撞唯一索引返回 **500 而非 1010/1016**。角色与权限走 `countByCodeIncludeDeleted`（显式 SQL 绕开过滤）；用户则用「删除时把 `email` 改写为 `#deleted_<时间戳>`」释放索引。
 - **断言要打到机制层**：验证「吊销即时生效」这类能力时，除了断言 401，还要断言 Redis 键已消失——否则每请求查库的 `isEnabled()` 兜底会让漏实现的代码也通过测试。
 - **会话脚本仅支持单节点 Redis**（无 hash tag，上集群会 CROSSSLOT）；Redis 不得改用 `allkeys-lru` 等淘汰策略（会话键被淘汰 = AT 无法吊销）。
 
 ## 测试
 
-`BaseIntegrationTest` 提供：`register` / `loginGetToken` / `loginGetAuth`（返回 `token`/`refreshToken`/`userId`/`email`）、`postJson` / `bearerHeader` / `uniqueEmail` / `adminToken()`（走真实 `assignRoles` 链路构造超管）。用例前后自动清理测试用户与 Redis 键。
+`BaseIntegrationTest` 提供：`register` / `loginGetToken` / `loginGetAuth`（返回 `token`/`refreshToken`/`userId`/`email`）、`postJson` / `bearerHeader` / `uniqueEmail` / `adminToken()`（走真实 `assignRoles` 链路构造超管）。用例前后自动清理测试用户、测试角色（`test-` 前缀，含逻辑删除行）、操作日志表，并清空 Redis 会话与权限缓存键。
 
 `SessionLuaTest` 是唯一直连会话层的测试（不经 HTTP），覆盖原子性、并发双花、清理完整性——**改动 Lua 脚本后必须让它全绿**。
+
+**34 个接口 ↔ 测试类的对应关系见 `docs/test/项目测试报告.md` §1.4 覆盖矩阵。** 新增接口须同步补测试：鉴权正反向、业务码矩阵、边界（401/403、越权、不存在）、以及机制层断言（该落库的落库、该清的键要清）。全部测试类：认证会话 `AuthControllerTest` / `AuthRefreshTest` / `AuthSessionTest` / `SecurityAccessTest` / `SessionLuaTest`，用户 `UserControllerTest` / `UserEdgeTest` / `UserKickTest` / `UserImportExportTest`，角色权限 `RoleTest` / `PermissionTest` / `RbacTest` / `RbacCacheTest` / `RbacCacheDisabledTest` / `AdminProtectionTest`，菜单日志 `MenuTest` / `LogTest`，改造回归 `RefactorRegressionTest`，全链路 `BusinessFlowTest`。
 
 ## 文档索引
 

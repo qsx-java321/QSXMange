@@ -95,6 +95,7 @@ public abstract class BaseIntegrationTest {
     void cleanDatabase() {
         cleanTestUsers();
         cleanTestRoles();
+        cleanOperationLog();
         cleanPermissionCache();
     }
 
@@ -102,6 +103,7 @@ public abstract class BaseIntegrationTest {
     void tearDown() {
         cleanTestUsers();
         cleanTestRoles();
+        cleanOperationLog();
         cleanPermissionCache();
     }
 
@@ -135,6 +137,17 @@ public abstract class BaseIntegrationTest {
         jdbcTemplate.update("DELETE rp FROM sys_role_permission rp "
                 + "JOIN sys_role r ON rp.role_id = r.id WHERE r.code LIKE ?", TEST_ROLE_CODE_LIKE);
         jdbcTemplate.update("DELETE FROM sys_role WHERE code LIKE ?", TEST_ROLE_CODE_LIKE);
+    }
+
+    /**
+     * 清理操作日志。
+     *
+     * 审计切面会把每个进入 Controller 的请求异步落库，一轮全量测试即可累积数百行，
+     * 而这些行全是测试噪音（该表非预置数据）。LogTest 自身也在每个用例前清空，
+     * 这里提升为基类行为，避免开发库里越堆越多。
+     */
+    private void cleanOperationLog() {
+        jdbcTemplate.update("DELETE FROM sys_operation_log");
     }
 
     /**
