@@ -95,8 +95,10 @@ public class PermissionServiceImpl implements PermissionService {
 
     @Override
     public PermissionVO create(MenuCreateRequest request) {
-        // 标识唯一性校验（菜单/按钮共用 code 唯一索引）
-        if (selectByCode(request.getCode()) != null) {
+        // 标识唯一性校验（菜单/按钮共用 code 唯一索引）：刻意包含逻辑删除行——
+        // uk_perm_code 是物理唯一索引，已删除菜单仍占用标识，
+        // 若判重被 @TableLogic 过滤，「删除菜单后用同一标识重建」会撞唯一索引返回 500
+        if (permissionMapper.countByCodeIncludeDeleted(request.getCode()) > 0) {
             throw new BusinessException(ResultCode.PERMISSION_CODE_EXISTS);
         }
 
@@ -253,10 +255,6 @@ public class PermissionServiceImpl implements PermissionService {
             throw new BusinessException(ResultCode.MENU_NOT_FOUND);
         }
         return permission;
-    }
-
-    private Permission selectByCode(String code) {
-        return permissionMapper.selectOne(new LambdaQueryWrapper<Permission>().eq(Permission::getCode, code));
     }
 
     /**

@@ -235,6 +235,6 @@ class RbacTest extends BaseIntegrationTest {
     }
 
     private String uniqueRoleCode() {
-        return "ROLE_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        return "test-role-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8);
     }
 }

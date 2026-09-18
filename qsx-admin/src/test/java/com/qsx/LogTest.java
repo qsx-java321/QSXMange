@@ -10,7 +10,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.web.servlet.MvcResult;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -170,5 +173,91 @@ class LogTest extends BaseIntegrationTest {
             Thread.sleep(100);
         }
         assertThat(logCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("日志分页筛选：url / success / method / username / 时间段")
+    void log_filters() throws Exception {
+        String token = adminToken();
+        cleanLogs();
+
+        mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/users/99999999").header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk());
+
+        OperationLog ok = awaitAnyMatch(l ->
+                l.getUrl() != null && l.getUrl().equals("/api/users") && l.getSuccess() == 1);
+        awaitAnyMatch(l -> l.getUrl() != null && l.getUrl().contains("/api/users/99999999"));
+
+        // 失败记录的 url 只被本用例触发，可精确断言 url + success + method 三个条件同时生效
+        JsonNode failed = queryLogs(token, "url", "/api/users/99999999", "success", "0", "method", "GET");
+        assertThat(failed.path("code").asInt()).isEqualTo(200);
+        assertThat(failed.path("data").path("total").asLong()).isEqualTo(1);
+        JsonNode failedRow = failed.path("data").path("records").get(0);
+        assertThat(failedRow.path("success").asInt()).isZero();
+        assertThat(failedRow.path("method").asText()).isEqualTo("GET");
+        assertThat(failedRow.path("httpStatus").asInt()).isEqualTo(200);
+        assertThat(failedRow.path("errorMsg").asText()).isNotEmpty();
+        assertThat(failedRow.path("costMs").asInt()).isGreaterThanOrEqualTo(0);
+
+        // 成功筛选不应把失败记录带出来
+        JsonNode succeeded = queryLogs(token, "url", "/api/users", "success", "1");
+        assertThat(succeeded.path("data").path("total").asLong()).isGreaterThanOrEqualTo(1);
+        succeeded.path("data").path("records")
+                .forEach(node -> assertThat(node.path("success").asInt()).isEqualTo(1));
+
+        // 操作人模糊筛选
+        JsonNode byUser = queryLogs(token, "username", ok.getUsername(), "pageSize", "50");
+        assertThat(byUser.path("data").path("total").asLong()).isGreaterThanOrEqualTo(1);
+        byUser.path("data").path("records")
+                .forEach(node -> assertThat(node.path("username").asText()).isEqualTo(ok.getUsername()));
+
+        // 时间段：起点置于未来无匹配，起点置于过去有匹配
+        String future = DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(LocalDateTime.now().plusDays(1));
+        String past = DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(LocalDateTime.now().minusDays(1));
+        assertThat(queryLogs(token, "beginTime", future).path("data").path("total").asLong()).isZero();
+        assertThat(queryLogs(token, "beginTime", past).path("data").path("total").asLong())
+                .isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("日志接口：未登录 401、普通用户 403，且成功调用不写自身审计日志")
+    void log_endpoints_authn_authz() throws Exception {
+        cleanLogs();
+
+        mockMvc.perform(get("/api/logs")).andExpect(status().isUnauthorized());
+        mockMvc.perform(delete("/api/logs/1")).andExpect(status().isUnauthorized());
+        mockMvc.perform(delete("/api/logs")).andExpect(status().isUnauthorized());
+
+        String userToken = registerAndLoginGetToken(uniqueEmail("logplain"), "abc123");
+        mockMvc.perform(get("/api/logs").header("Authorization", bearerHeader(userToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(delete("/api/logs/1").header("Authorization", bearerHeader(userToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(delete("/api/logs").header("Authorization", bearerHeader(userToken)))
+                .andExpect(status().isForbidden());
+
+        // 管理员正常调用日志接口：切面显式排除 /api/logs，成功调用不应产生「日志的日志」
+        String admin = adminToken();
+        mockMvc.perform(get("/api/logs").header("Authorization", bearerHeader(admin)))
+                .andExpect(status().isOk());
+
+        long deadline = System.currentTimeMillis() + 3000;
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(100);
+        }
+        assertThat(allLogs().stream().noneMatch(l ->
+                l.getUrl() != null && l.getUrl().startsWith("/api/logs") && l.getSuccess() == 1)).isTrue();
+    }
+
+    /** 以键值对形式调用日志分页接口（params 为 key,value,key,value...） */
+    private JsonNode queryLogs(String token, String... params) throws Exception {
+        var request = get("/api/logs").header("Authorization", bearerHeader(token));
+        for (int i = 0; i + 1 < params.length; i += 2) {
+            request = request.param(params[i], params[i + 1]);
+        }
+        MvcResult result = mockMvc.perform(request).andExpect(status().isOk()).andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString());
     }
 }

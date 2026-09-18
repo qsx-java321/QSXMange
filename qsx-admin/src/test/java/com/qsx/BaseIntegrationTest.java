@@ -78,6 +78,15 @@ public abstract class BaseIntegrationTest {
     /** 测试用户邮箱特征（uniqueEmail 生成），用于把测试数据与预置种子数据隔离 */
     private static final String TEST_EMAIL_LIKE = "%@test.com%";
 
+    /**
+     * 测试角色编码前缀（各测试类的 uniqueRoleCode 统一使用）。
+     *
+     * 预置角色只有 ADMIN，不带 test- 前缀；此前各测试类各用一套前缀（ROLE_/test-rbac-role-），
+     * 且多数不清理，导致反复运行后 sys_role 里堆积上百条测试角色（唯一索引 uk_role_code
+     * 是**物理**唯一，这些残留会一直占用编码空间）。统一前缀后由基类物理清理。
+     */
+    private static final String TEST_ROLE_CODE_LIKE = "test-%";
+
     /** 登录会话（token / refreshToken / userId / email） */
     protected record LoginSession(String token, String refreshToken, Long userId, String email) {
     }
@@ -85,12 +94,14 @@ public abstract class BaseIntegrationTest {
     @BeforeEach
     void cleanDatabase() {
         cleanTestUsers();
+        cleanTestRoles();
         cleanPermissionCache();
     }
 
     @AfterEach
     void tearDown() {
         cleanTestUsers();
+        cleanTestRoles();
         cleanPermissionCache();
     }
 
@@ -110,6 +121,20 @@ public abstract class BaseIntegrationTest {
         jdbcTemplate.update("DELETE ur FROM sys_user_role ur "
                 + "JOIN sys_user u ON ur.user_id = u.id WHERE u.email LIKE ?", TEST_EMAIL_LIKE);
         jdbcTemplate.update("DELETE FROM sys_user WHERE email LIKE ?", TEST_EMAIL_LIKE);
+    }
+
+    /**
+     * 清理测试角色（预置 ADMIN 不带 test- 前缀，不动）。
+     *
+     * 用户-角色 / 角色-权限关联必须先物理删除再删角色：角色删除接口是**逻辑删除**，
+     * 若只删 sys_role，残留的关联行会指向已删除角色，污染后续用例（如 selectRoleCodes 的 JOIN）。
+     */
+    private void cleanTestRoles() {
+        jdbcTemplate.update("DELETE ur FROM sys_user_role ur "
+                + "JOIN sys_role r ON ur.role_id = r.id WHERE r.code LIKE ?", TEST_ROLE_CODE_LIKE);
+        jdbcTemplate.update("DELETE rp FROM sys_role_permission rp "
+                + "JOIN sys_role r ON rp.role_id = r.id WHERE r.code LIKE ?", TEST_ROLE_CODE_LIKE);
+        jdbcTemplate.update("DELETE FROM sys_role WHERE code LIKE ?", TEST_ROLE_CODE_LIKE);
     }
 
     /**

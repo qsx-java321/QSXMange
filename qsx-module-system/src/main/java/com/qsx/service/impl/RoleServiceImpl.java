@@ -88,8 +88,10 @@ public class RoleServiceImpl implements RoleService {
 
     @Override
     public RoleVO create(RoleCreateRequest request) {
-        // 角色编码唯一性校验（穷比校验 request code 是否已存在，含逻辑删除库存量）
-        if (selectByCode(request.getCode()) != null) {
+        // 角色编码唯一性校验：刻意包含逻辑删除行——uk_role_code 是物理唯一索引，
+        // 用 BaseMapper 判重会被 @TableLogic 自动过滤掉已删除行，
+        // 于是「删除角色后用同一编码重建」通过校验、在 INSERT 时撞唯一索引变成 500
+        if (roleMapper.countByCodeIncludeDeleted(request.getCode()) > 0) {
             throw new BusinessException(ResultCode.ROLE_CODE_EXISTS);
         }
 
@@ -211,10 +213,6 @@ public class RoleServiceImpl implements RoleService {
             throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
         }
         return role;
-    }
-
-    private Role selectByCode(String code) {
-        return roleMapper.selectOne(new LambdaQueryWrapper<Role>().eq(Role::getCode, code));
     }
 
     private List<Long> selectPermissionIds(Long roleId) {

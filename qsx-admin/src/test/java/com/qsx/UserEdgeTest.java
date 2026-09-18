@@ -84,7 +84,7 @@ class UserEdgeTest extends BaseIntegrationTest {
 
     /** 角色编码唯一 */
     private String uniqueRoleCode() {
-        return "ROLE_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        return "test-role-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8);
     }
 
     /** 按 email 查 userId */

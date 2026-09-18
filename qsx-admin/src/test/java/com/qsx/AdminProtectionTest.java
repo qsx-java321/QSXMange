@@ -148,7 +148,7 @@ class AdminProtectionTest extends BaseIntegrationTest {
     }
 
     private String uniqueRoleCode() {
-        return "ROLE_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        return "test-role-" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
     }
 
     // ================== 第一道闸：接口拦截 ==================

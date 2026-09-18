@@ -221,6 +221,22 @@ class MenuTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("逻辑删除后的菜单标识不可复用：再次新增返回 1016 而非 500")
+    void menu_code_reuse_after_delete_rejected_1016() throws Exception {
+        String token = adminToken();
+        String code = TEST_PREFIX + "reuse-" + uniqueSuffix();
+        long id = menuId(createMenu(token, code, "待删除", "MENU", 0L, 1));
+
+        mockMvc.perform(delete("/api/menus/" + id).header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk());
+
+        // uk_perm_code 是物理唯一索引，逻辑删除行仍占用标识，判重必须包含已删除行
+        MvcResult again = createMenu(token, code, "重建", "MENU", 0L, 1);
+        assertThat(objectMapper.readTree(again.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1016);
+    }
+
+    @Test
     @DisplayName("授权菜单对应用户可见：建菜单/按钮→绑角色→current 返回该菜单")
     void menu_visible_for_authorized_user() throws Exception {
         String admin = adminToken();
@@ -260,6 +276,81 @@ class MenuTest extends BaseIntegrationTest {
                 .andExpect(status().isOk());
         assertThat(rolePermissionMapper.selectCount(
                 new LambdaQueryWrapper<RolePermission>().eq(RolePermission::getPermissionId, menuId))).isZero();
+    }
+
+    @Test
+    @DisplayName("修改菜单标识被拒 1023，且原标识与名称未被改动")
+    void menu_code_immutable_rejected_1023() throws Exception {
+        String token = adminToken();
+        String code = TEST_PREFIX + "immutable-" + uniqueSuffix();
+        long id = menuId(createMenu(token, code, "原名", "MENU", 0L, 1));
+
+        MvcResult upd = mockMvc.perform(put("/api/menus/" + id)
+                        .header("Authorization", bearerHeader(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"" + code + "X\",\"name\":\"试图改标识\",\"type\":\"MENU\"," +
+                                "\"parentId\":0,\"visible\":1,\"sort\":1}"))
+                .andExpect(status().isOk()).andReturn();
+        assertThat(objectMapper.readTree(upd.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1023);
+
+        // 标识是 @PreAuthorize 与菜单过滤的依据，拒绝后不能留下任何半成品写入
+        assertThat(permissionMapper.selectById(id).getCode()).isEqualTo(code);
+        assertThat(permissionMapper.selectById(id).getName()).isEqualTo("原名");
+    }
+
+    @Test
+    @DisplayName("菜单不存在的修改/删除返回 1013")
+    void menu_not_found_1013() throws Exception {
+        String token = adminToken();
+        long ghost = 99999999L;
+
+        MvcResult upd = mockMvc.perform(put("/api/menus/" + ghost)
+                        .header("Authorization", bearerHeader(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"ghost\",\"name\":\"ghost\",\"type\":\"MENU\"," +
+                                "\"parentId\":0,\"visible\":1,\"sort\":1}"))
+                .andExpect(status().isOk()).andReturn();
+        assertThat(objectMapper.readTree(upd.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1013);
+
+        MvcResult del = mockMvc.perform(delete("/api/menus/" + ghost)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk()).andReturn();
+        assertThat(objectMapper.readTree(del.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1013);
+    }
+
+    @Test
+    @DisplayName("父节点非法返回 1015：不存在 / 非菜单类型 / 指向自己的子孙")
+    void menu_parent_invalid_cases_1015() throws Exception {
+        String token = adminToken();
+        String buttonCode = TEST_PREFIX + "btn-parent-" + uniqueSuffix();
+        long buttonId = menuId(createMenu(token, buttonCode, "按钮节点", "PERMISSION", 0L, 1));
+
+        // 1) 父节点是按钮权限（type=PERMISSION），不能作为菜单父级
+        MvcResult underButton = createMenu(token, TEST_PREFIX + "bad1-" + uniqueSuffix(), "挂按钮下", "MENU", buttonId, 1);
+        assertThat(objectMapper.readTree(underButton.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1015);
+
+        // 2) 父节点不存在
+        MvcResult underGhost = createMenu(token, TEST_PREFIX + "bad2-" + uniqueSuffix(), "挂幽灵下", "MENU", 99999999L, 1);
+        assertThat(objectMapper.readTree(underGhost.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1015);
+
+        // 3) 把父菜单挂到自己的子孙下（防环的深度场景，区别于「指向自身」）
+        String parentCode = TEST_PREFIX + "p-" + uniqueSuffix();
+        long parentId = menuId(createMenu(token, parentCode, "父", "MENU", 0L, 1));
+        long childId = menuId(createMenu(token, TEST_PREFIX + "c-" + uniqueSuffix(), "子", "MENU", parentId, 1));
+
+        MvcResult cycle = mockMvc.perform(put("/api/menus/" + parentId)
+                        .header("Authorization", bearerHeader(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"" + parentCode + "\",\"name\":\"父\",\"type\":\"MENU\"," +
+                                "\"parentId\":" + childId + ",\"visible\":1,\"sort\":1}"))
+                .andExpect(status().isOk()).andReturn();
+        assertThat(objectMapper.readTree(cycle.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1015);
     }
 
     /** 按权限码查权限ID（用于关联测试数据） */
