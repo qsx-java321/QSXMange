@@ -44,70 +44,47 @@
 
 ## 二、项目结构
 
-按分层分包，单体单模块，根包 `com.qsx`：
+单体**多模块**（5 个 Maven 模块），根包 `com.qsx`：
 
 ```
-QSXManager
-├── pom.xml                          # Maven 依赖与构建配置
-├── sql/
-│   └── init.sql                     # 建表脚本（sys_user + RBAC 四表 + 菜单/权限 + 预置数据）
-├── src/
-│   ├── main/
-│   │   ├── java/com/qsx/
-│   │   │   ├── QsxProjectApplication.java   # Spring Boot 启动类
-│   │   │   ├── common/                      # 通用基础能力
-│   │   │   │   ├── result/                  # Result / PageResult / ResultCode
-│   │   │   │   ├── exception/               # BusinessException
-│   │   │   │   └── constant/                # SecurityConstants / PermissionConstants
-│   │   │   ├── config/                      # 全局配置
-	    │   │   │   │   ├── MybatisPlusConfig.java   # 分页插件 + 字段自动填充
-	    │   │   │   │   ├── AsyncConfig.java         # 异步线程池（操作日志落库）
-	    │   │   │   │   ├── event/                   # 权限缓存失效事件 + AFTER_COMMIT 监听器
-	    │   │   │   │   └── properties/              # AuthSessionProperties / RbacCacheProperties
-    │   │   │   ├── aspect/                      # AOP 切面
-    │   │   │   │   └── OperationLogAspect.java  # 操作日志：Controller 全量审计 + @Async 落库
-│   │   │   ├── security/                    # Spring Security + Redis 有状态双 token
-│   │   │   │   ├── config/SecurityConfig.java
-│   │   │   │   ├── filter/TokenAuthenticationFilter.java  # 每请求 Redis 反查身份
-│   │   │   │   ├── handler/                 # 401 / 403 JSON 处理
-│   │   │   │   ├── model/SecurityUser.java  # 封装角色码(ROLE_前缀) + 权限码
-│   │   │   │   ├── session/                 # 会话领域层（三键模型）
-│   │   │   │   │   ├── AuthRedisKeys.java                 # 三键前缀与构造器
-│   │   │   │   │   ├── AuthSession.java                   # 会话凭证（toString 脱敏）
-│   │   │   │   │   ├── AuthSessionService.java
-│   │   │   │   │   └── AuthSessionServiceImpl.java        # 三条 Lua 原子脚本调用
-│   │   │   │   ├── token/TokenProvider.java # AT/RT 同构随机串生成
-│   │   │   │   ├── service/SecurityUserDetailsService.java
-│   │   │   │   └── util/SecurityUtils.java
-│   │   │   ├── domain/                      # 领域模型
-│   │   │   │   ├── entity/                  # User / Role / Permission / UserRole / RolePermission
-│   │   │   │   └── base/BaseEntity.java     # 通用字段（含逻辑删除）
-│   │   │   ├── mapper/                      # MyBatis-Plus Mapper（含角色/权限联表查询）
-│   │   │   ├── service/                     # 业务接口 + impl
-	│   │   │   │   ├── AuthService.java         # 认证中心
-	│   │   │   │   ├── UserService.java         # 用户管理（含分配角色）
-	│   │   │   │   ├── RoleService.java         # 角色管理（含分配权限）
-	│   │   │   │   ├── PermissionService.java   # 菜单+权限管理（含树形）
-	│   │   │   │   └── PermissionCacheService.java  # RBAC 权限缓存（Redis 优先 + MySQL 回源）
-│   │   │   └── web/                         # Web 接入层
-│   │   │       ├── advice/GlobalExceptionHandler.java
-│   │   │       ├── controller/
-│   │   │       │   ├── auth/AuthController.java
-│   │   │       │   ├── admin/{user,role,perm,menu,log}/  # 用户/角色/权限/菜单/日志管理控制器
-│   │   │       ├── dto/{request,query}/
-│   │   │       └── vo/                      # 视图对象（不暴露密码）
-│   │   └── resources/
-│   │       ├── application.yml              # 应用配置（数据源 / Redis / 会话 / MyBatis-Plus）
-│   │       └── lua/                         # 会话 Lua 原子脚本
-│   │           ├── auth_session_issue.lua   # 登录签发（含单端覆盖）
-│   │           ├── auth_session_rotate.lua  # 刷新轮换（含绝对上限判定）
-│   │           └── auth_session_remove.lua  # 会话清理
-│   └── test/java/com/qsx/                   # 自动化集成测试（MockMvc + 真实 MySQL/Redis）
+QSXManager/                              # 父工程（packaging=pom，继承 spring-boot-starter-parent）
+├── pom.xml                              # 模块聚合 + 统一依赖版本（dependencyManagement）
+├── qsx-common/                          # ① 通用契约：谁都用它，它不依赖谁
+│   └── com/qsx/common/{result, exception, log}
+├── qsx-security/                        # ② 认证鉴权内核（可被其他项目单独复用）
+│   ├── com/qsx/security/                #    config / constant / event / cache / filter
+│   │                                    #    handler / model / service / session / token / util
+│   ├── com/qsx/security/port/           #    对外取数的端口（依赖倒置，由业务模块实现）
+│   └── resources/lua/                   #    会话三键原子脚本
+├── qsx-framework/                       # ③ 技术底座
+│   └── com/qsx/framework/{config, result, web, aspect}
+├── qsx-module-system/                   # ④ 系统管理业务模块（纵切，包名与原单模块一致）
+│   └── com/qsx/{mapper, domain, service, web, common/constant}
+├── qsx-admin/                           # ⑤ 启动器（唯一可执行产物）
+│   ├── src/main/java/com/qsx/QsxProjectApplication.java
+│   ├── src/main/resources/application.yml
+│   └── src/test/java/com/qsx/           #    自动化集成测试（138 例）
+├── sql/init.sql                         # 建表脚本（sys_user + RBAC 四表 + 菜单/权限 + 预置数据）
 └── docs/
-    └── session-notes/                       # 会话总结存档
 ```
 
-**依赖方向**：`web → service → mapper → domain`，`security` 依赖 `mapper/domain`，`common` 保持纯净、不依赖业务。
+**依赖方向（严格单向，无环）**：
+
+```
+qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-common
+```
+
+- **qsx-common**：`Result` / `ResultCode` / `BusinessException` + 审计端口契约（`AccessLogRecorder`）。零业务依赖，只依赖 lombok。
+- **qsx-security**：Spring Security 装配、令牌过滤器、Redis 双 token 会话（Lua 原子脚本）、权限缓存、`SecurityUser` / `SecurityUtils`。**不依赖任何业务模块**，通过 `port` 包下的端口向外取数。
+- **qsx-framework**：MyBatis-Plus 与异步线程池配置、`PageResult`、全局异常处理、操作日志切面。
+- **qsx-module-system**：认证 / 用户 / 角色 / 权限 / 菜单 / 日志 / Excel 的全部业务流程，连同其控制器、DTO、VO、实体、Mapper 与端口实现。
+- **qsx-admin**：启动类、配置与集成测试，是唯一产出可执行 fat jar 的模块。
+
+> **新增业务模块**：新建 `qsx-module-<域>`，pom 只依赖 `qsx-framework`，控制器沿用 `com.qsx.web.controller.<域>` 包路径即自动纳入审计切面；再按「三处同步」约定补权限码，**无需改动任何内核代码**。
+>
+> **单独复用认证内核**：只引入 `qsx-common` + `qsx-security` 时，必须自行提供 `AuthUserRepository`、`UserAuthorityRepository`、`AccessLogRecorder` 三个 Bean（否则启动即 `NoSuchBeanDefinitionException`），并保证 Redis 可用。
+
+**依赖方向**（旧版单模块描述的等价替换）：原 `web → service → mapper → domain` 现在全部落在 `qsx-module-system` 内部；`security` 不再依赖 `mapper/domain`，改为依赖自定义端口。
 
 ## 三、数据库
 
@@ -125,7 +102,8 @@ QSXManager
 
 ### 预置数据（幂等，`INSERT IGNORE`）
 - 6 个菜单（`system` 系统管理 → 用户/角色/权限/菜单/日志管理）
-- 22 个按钮权限码（`user:*` / `role:*` / `perm:*` / `menu:*` / `log:*`，与 `PermissionConstants` 一一对应，归属挂载到对应菜单下）
+- 23 个按钮权限码（`user:*` 9 个 / `role:*` 6 个 / `perm:*` 2 个 / `menu:*` 4 个 / `log:*` 2 个，与 `PermissionConstants` 一一对应，归属挂载到对应菜单下）
+  - 含 `user:kick`（强制登出用户，见「用户管理」接口表）；因权限码是分批次追加进 `init.sql` 的，**统计数字以 `PermissionConstants` 为准**
 - `ADMIN` 超级管理员角色，绑定全部菜单与权限
 - 超管账号 `admin@qsx.com / admin123`
 
@@ -280,12 +258,22 @@ docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 <
 > 等价 mysql 客户端方式：`mysql --default-character-set=utf8mb4 -uroot -p123456 < sql/init.sql`（脚本内已声明会话字符集，双保险）。
 
 ### 2. 配置数据源
-编辑 `src/main/resources/application.yml`，设置 `spring.datasource` 与 `spring.data.redis`，并按需调整 `qsx.auth.session`（`at-ttl` / `rt-ttl` / `max-lifetime`）与 `import.default-password`。
+编辑 `qsx-admin/src/main/resources/application.yml`，设置 `spring.datasource` 与 `spring.data.redis`，并按需调整 `qsx.auth.session`（`at-ttl` / `rt-ttl` / `max-lifetime`）与 `import.default-password`。
 
 ### 3. 启动
 
+多模块工程中只有 `qsx-admin` 是可执行模块。
+
+> ⚠️ **不要用 `mvn -pl qsx-admin -am spring-boot:run`**：`-am` 会把其余 4 个模块一起拉进 reactor，并对它们也执行 `spring-boot:run`，而它们没有主类，会直接 `BUILD FAILURE`。
+
 ```bash
-mvn spring-boot:run
+# 方式 A：打包后直接运行 fat jar（推荐）
+mvn -DskipTests package
+java -jar qsx-admin/target/qsx-admin-1.0.0.jar
+
+# 方式 B：先装本地仓库，再单独启动（不带 -am）
+mvn -DskipTests install
+mvn -pl qsx-admin spring-boot:run
 ```
 
 应用默认端口 `8080`。
@@ -302,7 +290,9 @@ curl -X POST http://localhost:8080/auth/login \
 ### 5. 运行自动化测试（可选）
 
 ```bash
-mvn clean test
+mvn test                              # 全量（仅 qsx-admin 有测试，共 138 例）
+mvn test -Dtest=SessionLuaTest        # 单个测试类
+mvn test -Dtest='RbacTest,MenuTest'   # 多个类必须加引号
 ```
 
 测试复用本地 MySQL 的 QSXManager 库与本地 Redis，**两者都必须可用**：认证链路依赖 Redis，Redis 不可用时绝大部分需要登录态的用例会因 401 失败。测试只清理自己创建的测试用户（`*@test.com`），预置超管与种子权限不会被删除。
@@ -313,12 +303,13 @@ mvn clean test
 
 | 扩展方向 | 起点 |
 |------|------|
-| 新增业务模块 | 按 `web → service → mapper → domain` 分层新增；接口鉴权用 `@PreAuthorize("hasAuthority('...')")` |
-| 新增权限码 | 同步**三处**：`sql/init.sql` 预置（`INSERT IGNORE` + 自动绑 ADMIN）、`PermissionConstants`、控制器注解 |
+| 新增业务模块 | 新建 `qsx-module-<域>`，pom 只依赖 `qsx-framework`；控制器放 `com.qsx.web.controller.<域>` 即自动纳入审计；鉴权用 `@PreAuthorize("hasAuthority('...')")`；最后在 `qsx-admin` 的 pom 加一行依赖。**无需改动任何内核代码** |
+| 新增权限码 | 同步**三处**：`sql/init.sql` 预置（`INSERT IGNORE` + 自动绑 ADMIN）、`PermissionConstants`（位于 `qsx-module-system`）、控制器注解 |
 | 新增前端菜单 | 复用 `sys_permission`（`type=MENU`，`parent_id` 成树），`GET /api/menus/current` 直接对接动态路由 |
 | 扩展用户生命周期 | 任何涉及账号状态或凭据的变更，**必须一并调用 `AuthSessionService.remove(userId)`** 回收会话，否则旧令牌仍然有效 |
-| 接入审计 | `OperationLogAspect` 对 `com.qsx.web.controller` 包级扫描，新增控制器自动纳入 |
-| 调整会话语义 | 多键操作必须走 Lua（`resources/lua/auth_session_*.lua`），**改脚本前先读脚本头部注释** |
+| 接入审计 | `OperationLogAspect`（`qsx-framework`）对 `com.qsx.web.controller` 包级扫描，新增控制器自动纳入；落库经 `AccessLogRecorder` 端口异步完成 |
+| 调整会话语义 | 多键操作必须走 Lua（`qsx-security/src/main/resources/lua/auth_session_*.lua`），**改脚本前先读脚本头部注释** |
+| 单独复用认证内核 | 只引入 `qsx-common` + `qsx-security` 时，必须自行提供 `AuthUserRepository`、`UserAuthorityRepository`、`AccessLogRecorder` 三个 Bean，否则启动即 `NoSuchBeanDefinitionException` |
 
 ---
 

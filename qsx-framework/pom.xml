@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.qsx</groupId>
+        <artifactId>qsx-manager-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>qsx-framework</artifactId>
+    <name>qsx-framework</name>
+    <description>技术底座：MyBatis-Plus 配置、异步线程池、分页返回体、全局异常处理、操作日志切面</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.qsx</groupId>
+            <artifactId>qsx-security</artifactId>
+        </dependency>
+
+        <!-- 操作日志切面 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+        </dependency>
+        <!-- 分页插件 PaginationInnerInterceptor -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.qsx</groupId>
+        <artifactId>qsx-manager-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>qsx-security</artifactId>
+    <name>qsx-security</name>
+    <description>认证鉴权内核：Spring Security 装配、令牌过滤器、Redis 双 token 会话（Lua 原子脚本）、权限缓存</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.qsx</groupId>
+            <artifactId>qsx-common</artifactId>
+        </dependency>
+
+        <!-- 两个 handler 需要 Servlet API 与 Jackson；单体应用无「引入 Web 容器」的代价 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <!-- AuthSessionProperties 的 @AssertTrue 启动期校验 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <!-- 会话三键与权限缓存 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+</project>

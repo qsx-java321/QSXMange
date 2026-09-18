@@ -5,13 +5,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 常用命令
 
 ```bash
-mvn -o -DskipTests compile        # 快速编译（离线可用）
-mvn spring-boot:run               # 启动，端口 8080
-mvn test                          # 全量测试（138 例）
+mvn -o -DskipTests compile        # 快速编译（离线可用，5 个模块）
+mvn -o -DskipTests package        # 打包（仅 qsx-admin 产出可执行 fat jar）
+mvn test                          # 全量测试（138 例；仅 qsx-admin 有测试）
 mvn test -Dtest=SessionLuaTest    # 单个测试类
 mvn test -Dtest='SessionLuaTest#rotate_replayOldRefreshToken_rejected'   # 单个方法
 mvn test -Dtest='RbacTest,MenuTest'                                      # 多个类必须加引号
 ```
+
+启动（多模块中只有 `qsx-admin` 可执行）：
+
+```bash
+java -jar qsx-admin/target/qsx-admin-1.0.0.jar     # 先 package，再直接跑 fat jar（推荐）
+# 或：mvn -o -DskipTests install && mvn -o -pl qsx-admin spring-boot:run
+```
+
+> **不要用 `mvn -pl qsx-admin -am spring-boot:run`**：`-am` 会把其余 4 个模块拉进 reactor 并对它们也执行 `spring-boot:run`，它们没有主类，会直接 `BUILD FAILURE`。
 
 **前置条件**：MySQL 8.4（`localhost:3306/QSXManager`，root/123456）与 Redis 7.4（`localhost:6379`）都在 Docker 中运行，且**两者都必须可用**——认证链路依赖 Redis，Redis 不可用时绝大部分需要登录态的用例会因 401 失败。依赖已缓存后 `-o` 离线可跑。
 
@@ -26,7 +35,25 @@ docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 <
 
 ## 架构
 
-分层：`web → service → mapper → domain`；`security → mapper/domain`；`common` 保持纯净。根包 `com.qsx`。
+单体**多模块**（5 个 Maven 模块），根包 `com.qsx`，依赖严格单向、无环：
+
+```
+qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-common
+```
+
+| 模块 | 职责 | 关键约束 |
+| :--- | :--- | :--- |
+| `qsx-common` | `Result` / `ResultCode` / `BusinessException` + 审计端口契约 `AccessLogRecorder` | 只依赖 lombok，零业务依赖 |
+| `qsx-security` | Security 装配、令牌过滤器、Redis 双 token 会话 + Lua、权限缓存、`SecurityUser` / `SecurityUtils` | **不得依赖任何业务模块**；向外取数走 `port` 包（`AuthUserRepository` / `UserAuthorityRepository`），由业务模块实现 |
+| `qsx-framework` | MyBatis-Plus 与异步线程池配置、`PageResult`、全局异常处理、操作日志切面 | **不得依赖任何业务模块**；审计落库走 `AccessLogRecorder` 端口 |
+| `qsx-module-system` | 认证 / 用户 / 角色 / 权限 / 菜单 / 日志 / Excel 全部业务 + 端口实现 | 包名与原单模块一致；`mapper/adapter` 下是端口实现（必须 `@Component`） |
+| `qsx-admin` | 启动类、`application.yml`、集成测试 | 唯一可执行模块；`spring-boot-maven-plugin` 只在此声明 |
+
+**新增业务模块**：建 `qsx-module-<域>`，pom 只依赖 `qsx-framework`，控制器沿用 `com.qsx.web.controller.<域>` 即自动纳入审计，再在 `qsx-admin` 的 pom 加一行依赖——**无需改动任何内核代码**。
+
+**包路径是契约，不能随意挪**：`com.qsx.web.controller`（审计切点）、`com.qsx.mapper`（`@Mapper` 扫描）、`com.qsx.domain.entity`（`type-aliases-package`）三者一旦移动会静默失效（不报错，只是切面/扫描/别名全部落空）。
+
+**单独复用认证内核**：只引 `qsx-common` + `qsx-security` 时，必须自行提供 `AuthUserRepository`、`UserAuthorityRepository`、`AccessLogRecorder` 三个 Bean，否则启动即 `NoSuchBeanDefinitionException`。
 
 ### 认证与会话（本项目最需要先读懂的部分）
 
@@ -38,7 +65,7 @@ docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 <
 | `qsx:auth:rt:{rt}` | userId | 7d | RT → userId；轮换时删旧立新 |
 | `qsx:auth:session:{userId}` | Hash{accessToken, refreshToken, firstLoginTs} | 7d 滑动 | 单端覆盖、按用户清理、绝对上限 |
 
-- 三个多键操作全部走 Lua 原子脚本（`resources/lua/auth_session_*.lua`），实现在 `security/session/AuthSessionServiceImpl`——**改会话行为先读这三个脚本的头部注释**，里面写明了每条约定的原因。
+- 三个多键操作全部走 Lua 原子脚本（`qsx-security/src/main/resources/lua/auth_session_*.lua`，**脚本必须与 `AuthSessionServiceImpl` 同模块**，否则 `ClassPathResource` 加载失败），实现在 `qsx-security` 的 `security/session/AuthSessionServiceImpl`——**改会话行为先读这三个脚本的头部注释**，里面写明了每条约定的原因。
 - 请求链路：`TokenAuthenticationFilter`（Redis 反查 userId）→ `SecurityUserDetailsService.loadUserById`（实时查库 + 权限缓存）→ `isEnabled()` → 写入 SecurityContext。
 - 吊销入口统一为 `AuthSessionService.remove(userId)`，调用点：登出、踢人、禁用、删除用户、改密。**新增任何涉及账号状态或凭据的用户生命周期变更，必须一并清理会话**，否则旧令牌仍然有效。
 - **fail 策略分级**：会话层 fail-closed（Redis 故障 = 拒绝认证，宁可不放行）；权限缓存 fail-open（Redis 异常降级查库）。两者边界不可混淆。
@@ -60,7 +87,8 @@ docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 <
 ### 统一返回与审计
 
 - 所有接口返回 `Result{code,message,data}`。**业务异常返回 HTTP 200 + body 里的业务码**（`GlobalExceptionHandler`），断言要看业务码而不是 HTTP 状态。
-- 操作日志由 `OperationLogAspect` 对 `com.qsx.web.controller` 包级扫描，以 `Result.code==200` 判定成功，`@Async` 落库；401 由 `RestAuthenticationEntryPoint` 补记、400 由异常处理器补记。
+- 操作日志由 `OperationLogAspect`（`qsx-framework`）对 `com.qsx.web.controller` 包级扫描，以 `Result.code==200` 判定成功，经 `AccessLogRecorder` 端口异步落库；401 由 `RestAuthenticationEntryPoint` 补记、400 由异常处理器补记。
+- **`@Async` 不得自调用**：`OperationLogServiceImpl.record()` 上的 `@Async` 靠 Spring 代理生效，若改成同类内部调用（如再包一层 `this.xxx()`）会静默失效——日志落库退化为同步、主请求被数据库写入阻塞，且**没有编译错误**。
 
 ## 必须遵守的项目约定（都是踩过坑换来的）
 
@@ -82,6 +110,7 @@ docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 <
 ## 文档索引
 
 - `README.md`：技术栈、完整接口表（含权限码）、错误码表、快速开始
+- `docs/design/单体多模块改造方案.md`：5 模块划分依据、端口解环设计、文件搬迁映射、4 个实施阶段的验收标准（**含 3 轮审查记录与 16 处修正**）
 - `docs/design/springboot项目设计.md`：设计规格（含认证流程）
 - `docs/design/用户与会话管理机制说明.md`：用户管理与会话管理的模式、流程、保护矩阵（含代码索引）
 - `docs/test/test-report.md`：当前测试报告（端到端场景与修复记录）
