@@ -4,7 +4,7 @@
 
   名称: QSXProJect
 
-  定位: 用户后台管理基础 demo——单体单模块、前后端分离，为其他项目提供可直接复用的认证/授权/用户/会话基座
+  定位: 用户后台管理基础 demo——单体多模块（5 模块：qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-common，依赖严格单向无环）、前后端分离，为其他项目提供可直接复用的认证/授权/用户/会话基座
 
   目标: 提供邮箱密码注册登录、令牌认证（Redis 有状态双 token）、完整RBAC权限、用户/角色/权限管理
 
@@ -58,53 +58,31 @@
 
   根包: com.qsx
 
-  说明: 按层分包，单体单模块，适合当前阶段
+  说明: 单体多模块，5 个 Maven 模块依赖严格单向、无环；qsx-admin 为唯一可执行模块
 
-  包:
+  模块:
 
-    - 路径: QsxProjectApplication
+    - 名称: qsx-common
 
-      职责: Spring Boot 启动类
-
-    - 路径: common
-
-      职责: 通用基础能力，不依赖业务、Web、Security、MyBatis-Plus
+      职责: 通用基础能力，零业务依赖（只依赖 lombok）
 
       子包:
 
         - 路径: result
 
-          职责: Result、PageResult、ResultCode
-
-        - 路径: exception
-
-          职责: BusinessException、基础异常定义
+          职责: Result、ResultCode、BusinessException
 
         - 路径: constant
 
-          职责: 通用常量、SecurityConstants、CacheConstants
+          职责: 通用常量
 
-        - 路径: util
+        - 路径: audit
 
-          职责: 纯通用工具类
+          职责: AccessLogRecorder 端口契约（审计落库抽象）
 
-    - 路径: config
+    - 名称: qsx-security
 
-      职责: 全局配置类
-
-      包含:
-
-        - MybatisPlusConfig
-
-        - WebMvcConfig
-
-        - JacksonConfig
-
-        - properties
-
-    - 路径: security
-
-      职责: Spring Security 与令牌认证授权
+      职责: Security 装配、令牌过滤器、Redis 双 token 会话（+Lua）、权限缓存、SecurityUser / SecurityUtils；不得依赖任何业务模块，向外取数走 port 包
 
       子包:
 
@@ -118,123 +96,85 @@
 
         - 路径: handler
 
-          职责: 401、403 JSON 处理
+          职责: 401、403 JSON 处理（RestAuthenticationEntryPoint、AccessDeniedHandler）
 
-        - 路径: token
+        - 路径: session
 
-          职责: 令牌生成（TokenProvider）、会话读写（session 子包）
+          职责: 会话三键服务 AuthSessionServiceImpl + lua 脚本（脚本必须与 use 方同模块，否则 ClassPathResource 加载失败）
+
+        - 路径: permission
+
+          职责: 权限缓存 PermissionCacheService（fail-open）
 
         - 路径: model
 
-          职责: LoginUser、SecurityUser
+          职责: SecurityUser、SecurityUtils
 
-        - 路径: util
+        - 路径: port
 
-          职责: SecurityUtils
+          职责: AuthUserRepository / UserAuthorityRepository（由业务模块实现，解环关键）
+
+    - 名称: qsx-framework
+
+      职责: 基础设施，不得依赖任何业务模块；审计落库走 AccessLogRecorder 端口
+
+      子包:
+
+        - 路径: config
+
+          职责: MyBatis-Plus 与异步线程池配置
+
+        - 路径: result
+
+          职责: PageResult
+
+        - 路径: exception
+
+          职责: 全局异常处理 GlobalExceptionHandler（业务异常 HTTP 200 + 业务码）
+
+        - 路径: aspect
+
+          职责: 操作日志切面 OperationLogAspect（包级扫描 web.controller，@Async 异步落库）
+
+    - 名称: qsx-module-system
+
+      职责: 认证 / 用户 / 角色 / 权限 / 菜单 / 日志 / Excel 全部业务 + 端口实现；控制器沿用 com.qsx.web.controller.<域> 自动纳入审计
+
+      子包:
+
+        - 路径: web.controller
+
+          职责: 控制器（auth、user、role、permission、menu、log）；该包名是审计切点契约，不可移动
+
+        - 路径: web.dto / web.vo
+
+          职责: 请求 / 响应对象
 
         - 路径: service
 
-          职责: UserDetailsService 实现，如 SecurityUserDetailsService
+          职责: AuthService、UserService、RoleService、PermissionService、PermissionCacheService、OperationLogService、UserImportExportService（+ impl 子包）
 
-    - 路径: domain
+        - 路径: mapper
 
-      职责: 领域模型
+          职责: MyBatis-Plus Mapper（com.qsx.mapper 包名是 @Mapper 扫描契约；adapter 下为端口实现，必须 @Component）
 
-      子包:
+        - 路径: domain.entity
 
-        - 路径: entity
+          职责: 数据库实体（com.qsx.domain.entity 包名是 type-aliases-package 契约）
 
-          职责: 数据库实体，如 User、Role、Permission、UserRole、RolePermission
+    - 名称: qsx-admin
 
-        - 路径: base
+      职责: 启动类、application.yml、集成测试；唯一可执行模块，产出 fat jar；新增业务模块只需在其 pom 加一行依赖
 
-          职责: BaseEntity 等实体基类
-
-    - 路径: mapper
-
-      职责: MyBatis-Plus Mapper 接口
-
-    - 路径: service
-
-      职责: 业务服务接口
-
-      核心接口:
-
-        - AuthService
-
-        - UserService
-
-        - RoleService
-
-        - PermissionService
-
-        - PermissionCacheService
-
-        - OperationLogService
-
-        - UserImportExportService
-
-      子包:
-
-        - 路径: impl
-
-          职责: 服务实现
-
-    - 路径: web
-
-      职责: Web 接入层
-
-      子包:
-
-        - 路径: advice
-
-          职责: 全局异常处理 GlobalExceptionHandler
-
-        - 路径: controller
-
-          职责: 控制器
-
-          子包:
-
-            - 路径: admin
-
-              子包:
-
-                - user
-
-                - role
-
-                - permission
-
-            - 路径: auth
-
-        - 路径: dto
-
-          子包:
-
-            - request
-
-            - query
-
-        - 路径: vo
-
-          职责: 返回前端的视图对象（Entity → VO 转换用静态工厂 `from(...)`）
-
-    - 路径: security
-
-      职责: Spring Security 配置、令牌认证过滤器、会话三键服务与 Lua 脚本加载、权限加载
-
-    - 路径: aspect
-
-      职责: 操作日志切面（包级扫描 `web.controller`）
+      （新增业务模块：建 qsx-module-<域>，pom 只依赖 qsx-framework，无需改动任何内核代码）
 
   资源目录:
 
-    - 路径: resources/mapper
+    - 路径: qsx-security/resources/lua
 
-      职责: 复杂 SQL 的 MyBatis XML
+      职责: 会话 Lua 脚本（auth_session_find / issue / remove）
 
-    - 路径: resources/application.yml
+    - 路径: qsx-admin/resources/application.yml
 
       职责: 应用配置
 
@@ -242,25 +182,23 @@
 
 依赖方向:
 
-  规则:
-
-    - web -> service -> mapper -> domain
-
-    - security -> mapper/domain
-
-    - config -> 各配置类
-
-    - common -> 尽量只依赖 Java 标准库和通用工具
+  规则: qsx-admin -> qsx-module-system -> qsx-framework -> qsx-security -> qsx-common（依赖严格单向、无环）
 
   禁止:
 
-    - service 依赖 web
+    - qsx-common 依赖 Web/Security/MyBatis-Plus/任何业务模块（只依赖 lombok）
 
-    - domain 依赖 web/dto/vo
+    - qsx-security、qsx-framework 依赖任何业务模块（向外取数走 port / AccessLogRecorder 端口）
 
-    - common 依赖 Security/MyBatis-Plus/Web
+    - 业务模块（qsx-module-system 等）转向依赖 qsx-framework 之下的模块，或反向依赖 qsx-admin
 
-    - security 与 service 循环依赖
+  包路径契约（一旦移动会静默失效、不报错）:
+
+    - com.qsx.web.controller（审计切点）
+
+    - com.qsx.mapper（@Mapper 扫描）
+
+    - com.qsx.domain.entity（type-aliases-package 别名）
 
 
 
@@ -378,17 +316,21 @@
 
         - 前端菜单和按钮控制
 
-      权限标识示例:
+      权限标识示例（实际权限码，与 PermissionConstants / init.sql 一致）:
 
-        - "system:user:list"
+        - user:page / user:get / user:create / user:update / user:delete / user:assign-role
 
-        - "system:user:add"
+        - role:page / role:get / role:create / role:update / role:delete / role:assign
 
-        - "system:user:update"
+        - perm:page / perm:get
 
-        - "system:user:delete"
+        - menu:tree / menu:create / menu:update / menu:delete
 
-        - "system:role:assign"
+        - log:page / log:delete
+
+        - user:kick（强制登出）、user:import / user:export（Excel 导入导出）
+
+      关键约束: ADMIN 角色通过绑定全量权限码实现（非硬编码绕过）；新增权限码须同步 init.sql 预置（INSERT IGNORE + 自动绑 ADMIN）、PermissionConstants、控制器 @PreAuthorize 三处
 
     - 名称: 基础设施
 
@@ -610,7 +552,7 @@ RBAC模型:
 
 注意事项:
 
-  - common 保持干净，不要变成垃圾桶
+  - common 保持干净，不要变成垃圾桶（只依赖 lombok）
 
   - Entity 不直接返回前端，避免泄露 password
 
@@ -618,15 +560,17 @@ RBAC模型:
 
   - Service 按业务划分，不机械按表划分
 
-  - security.service 不要依赖 AuthService，避免循环依赖
+  - qsx-security 与业务模块解环靠 port，不互相依赖
 
-  - 令牌登出、踢人、禁用、改密、权限变更都要配合 Redis（会话三键 + 权限缓存）
+  - 令牌登出、踢人、禁用、改密、删除用户都要配合 Redis（会话三键清理，AuthSessionService.remove 统一收口）
 
-  - 逻辑删除与邮箱唯一索引要处理冲突
+  - 逻辑删除与邮箱唯一索引要处理冲突（删除时改写 email 释放 uk_email）
 
-  - 权限变更后注意缓存一致性
+  - 权限变更后注意缓存一致性（AFTER_COMMIT 事件精确失效）
 
-  - 单体单模块先跑通核心闭环，不要过度设计
+  - 角色/权限标识 code 创建后不可修改（鉴权依据）；内置 ADMIN 角色禁止删除/停用/改名
+
+  - 会话层 fail-closed、权限缓存 fail-open，两者边界不可混淆
 
 
 

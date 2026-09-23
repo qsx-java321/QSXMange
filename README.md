@@ -1,6 +1,6 @@
 # QSXManager 后台管理系统
 
-> 单体单模块、前后端分离的**用户后台管理基础 demo** —— 为其他项目提供可直接复用的认证、授权、用户与会话基座。
+> 单体**多模块**（5 个 Maven 模块）、前后端分离的**用户后台管理基础 demo** —— 为其他项目提供可直接复用的认证、授权、用户与会话基座。
 
 本项目覆盖「认证中心（邮箱+密码+**Redis 有状态双 token 会话**）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」「操作日志（AOP 访问审计）」「用户 Excel 批量导入导出」与「RBAC 权限缓存（Redis）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。用户登出、管理员强制登出（踢下线）、账号禁用/解冻、删除用户与修改密码均已在会话层打通，**旧 access token 一律立即失效**。
 
@@ -319,4 +319,14 @@ mvn test -Dtest='RbacTest,MenuTest'   # 多个类必须加引号
 
 ---
 
-更多设计与实现细节见 `docs/session-notes/` 下的会话总结。
+## 八、文档导航
+
+| 文档 | 定位 |
+|------|------|
+| [docs/design/springboot项目设计.md](docs/design/springboot项目设计.md) | 设计规格（架构/模块划分、认证流程、数据表、注意事项） |
+| [docs/design/验证码功能改造计划方案.md](docs/design/验证码功能改造计划方案.md) | 邮箱验证码能力引入计划（**规划中未实行**，含 Mailpit + @Async 异步投递通道设计） |
+| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 全项目测试总报告（34 接口覆盖矩阵、171 例自动化基线、171 条真实 HTTP 明细）；原始请求/响应见同目录 `项目测试报告.json` |
+| [docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md](docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md) | 全项目主线总览（阶段脉络、跨阶段决策、设计约束与有意取舍） |
+| [docs/dev-env/组件依赖README.md](docs/dev-env/组件依赖README.md) | Docker 中间件清单（MySQL/Redis/RabbitMQ/Kafka/SeaweedFS/Mailpit）部署与启停 |
+
+> 早期阶段增量会话总结与分散测试报告已完成归档合并，仅保留上表主线/总报告文档，避免信息冗余。

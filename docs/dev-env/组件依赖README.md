@@ -9,6 +9,7 @@
 | 缓存/中间件 | Redis | 7.4.6 (LTS) | 高吞吐、高安全、长周期维护 |
 | 消息队列 | RabbitMQ | 3.16.2-management | 强可靠、原生兼容、LTS 主线 |
 | 消息队列 | Kafka | 4.3.1 | 稳定可靠 |
+| 邮件测试 | Mailpit | v1.31 | 本地假 SMTP，拦截验证码邮件，Web UI 预览 |
 
 ##🚨 模块隔离铁律（依赖管理红线）
 
@@ -178,6 +179,41 @@ docker run -d \
   server -dir=/data -master.defaultReplication=001 -s3
 ```
 
+# Mailpit v1.31（本地假 SMTP，模拟接收邮件验证码）
+```bash
+docker run -d \
+  --name=mailpit \
+  --restart unless-stopped \
+  -v mailpit-data:/data \
+  -e MP_DATABASE=/data/mailpit.db \
+  -e TZ=Asia/Shanghai \
+  -p 8025:8025 \
+  -p 1025:1025 \
+  axllent/mailpit:v1.31
+```
+
+Mailpit 是**仅用于本地开发**的假 SMTP 服务器，不真正投递邮件，而是拦截应用发往验证码/通知的邮件，供开发者在浏览器中直接查看邮件内容（取验证码），解决「本地无真实邮箱、验证码看不到」的痛点。
+
+| 参数 | 作用 |
+| :--- | :--- |
+| `-p 1025:1025` | SMTP 端口，应用侧以 `localhost:1025` 作为发信服务器地址 |
+| `-p 8025:8025` | Web UI 端口，浏览器打开查看收到的邮件（无登录） |
+| `-v mailpit-data:/data` | 邮件数据卷（SQLite 落盘到 mailpit-data），重启不丢邮件 |
+| `-e MP_DATABASE=/data/mailpit.db` | 指定 SQLite 数据库文件路径，配合上面的数据卷实现持久化 |
+| `-e TZ=Asia/Shanghai` | 容器时区，邮件时间显示与本地一致 |
+| `--restart unless-stopped` | Docker 重启后自动拉起（本项目唯一开启自启的中间件） |
+
+开发场景应用侧对接（示例，禁止在生产使用本配置）：
+```yaml
+spring:
+  mail:
+    host: localhost
+    port: 1025
+    username: ""      # Mailpit 不校验账号密码
+    password: ""
+```
+发送方可用任意地址（如 `no-reply@qsx.local`）。通过 Web UI `http://127.0.0.1:8025` 即可查看拦截到的邮件及验证码。
+
 # 目前全部网页控制台访问链接
 RabbitMQ 消息管理后台
 地址：http://127.0.0.1:15672
@@ -188,6 +224,8 @@ SeaweedFS Filer 文件可视化管理面板（文件夹式操作文件）
 地址：http://127.0.0.1:8888
 SeaweedFS S3 对象存储端点（程序对接使用，无网页控制台）
 地址：http://127.0.0.1:18081
+Mailpit 邮件预览面板（拦截的收件箱，无登录）
+地址：http://127.0.0.1:8025
 # docker 数据集使用情况
 ```bath
 qsx@qiu2024:~$ docker volume ls
@@ -195,6 +233,7 @@ DRIVER    VOLUME NAME
 local     rabbitmq-data
 local     redis-data
 local     seaweedfs-data
+local     mailpit-data
 qsx@qiu2024:~$ docker volume inspect seaweedfs-data
 [
     {
@@ -239,6 +278,18 @@ qsx@DESKTOP-SUFEJ61:~$ docker volume inspect mysql-data
         "Labels": null,
         "Mountpoint": "/var/lib/docker/volumes/mysql-data/_data",
         "Name": "mysql-data",
+        "Options": null,
+        "Scope": "local"
+    }
+]
+qsx@DESKTOP-SUFEJ61:~$ docker volume inspect mailpit-data
+[
+    {
+        "CreatedAt": "2026-09-23T10:00:03Z",
+        "Driver": "local",
+        "Labels": null,
+        "Mountpoint": "/var/lib/docker/volumes/mailpit-data/_data",
+        "Name": "mailpit-data",
         "Options": null,
         "Scope": "local"
     }
@@ -294,6 +345,19 @@ qsx@DESKTOP-SUFEJ61:~$
 
 ---
 
+### 5. Mailpit（本地假 SMTP，模拟邮箱接收验证码）
+- **容器 ID**：`efd32e7df5e8`
+- **镜像版本**：`axllent/mailpit:v1.31`
+- **状态**：运行中（health 健康检查通过：healthy；2026-09-23 新建，`--restart unless-stopped` 自动拉起）
+- **端口映射**：
+  - `1025` → SMTP 端口（应用发信对接：`localhost:1025`，不校验账号密码）
+  - `8025` → Web 预览界面端口（`http://localhost:8025`，无登录）
+- **数据卷**：`mailpit-data:/data`（内嵌 SQLite 落盘 `/data/mailpit.db`）
+- **容器名**：`mailpit`
+- **用途**：拦截本地开发环境发出的验证码/通知邮件，浏览器直接查看取码
+
+---
+
 ### 快速访问摘要（供您本地调试）
 | 服务 | 连接地址/端口 | 管理入口 |
 |------|---------------|----------|
@@ -301,3 +365,4 @@ qsx@DESKTOP-SUFEJ61:~$
 | Redis | `localhost:6379` | 命令行 `redis-cli` |
 | RabbitMQ | `localhost:5672` | Web UI：`http://localhost:15672`（默认 guest/guest） |
 | SeaweedFS | Master `localhost:9333`，Filer/S3 `localhost:8888`，Volume `localhost:8080` | 可视需查看 API |
+| Mailpit | SMTP `localhost:1025`，Web UI `localhost:8025` | Web UI：`http://localhost:8025`（无登录） |

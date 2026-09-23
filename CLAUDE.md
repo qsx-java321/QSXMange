@@ -113,8 +113,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 ## 文档索引
 
 - `README.md`：技术栈、完整接口表（含权限码）、错误码表、快速开始
-- `docs/design/单体多模块改造方案.md`：5 模块划分依据、端口解环设计、文件搬迁映射、4 个实施阶段的验收标准（**含 3 轮审查记录与 16 处修正**）
-- `docs/design/springboot项目设计.md`：设计规格（含认证流程）
-- `docs/design/用户与会话管理机制说明.md`：用户管理与会话管理的模式、流程、保护矩阵（含代码索引）
+- `docs/design/springboot项目设计.md`：设计规格（架构/模块划分、认证流程、数据表、注意事项）
+- `docs/design/验证码功能改造计划方案.md`：邮箱验证码能力引入计划（规划中未实行，含 Mailpit + @Async 异步投递通道设计）
 - `docs/test/项目测试报告.md`：**全项目测试总报告**（四轮合并：34 接口覆盖矩阵、171 例自动化基线、171 条真实 HTTP 逐接口明细、累计 16 处产品缺陷与 7 项观察项、环境清理验收）；原始请求/响应见同目录 `项目测试报告.json`
-- `docs/session-notes/qsxmanager/`：各阶段会话总结与测试报告；`会话总结-qsxmanager全项目.md` 是主线总览（含设计约束与有意取舍）
+- `docs/session-notes/qsxmanager/`：`会话总结-qsxmanager全项目.md` 是主线总览（含设计约束与有意取舍）；早期阶段增量总结已合并归档删除，早期测试细节已并入 `docs/test/项目测试报告.md`

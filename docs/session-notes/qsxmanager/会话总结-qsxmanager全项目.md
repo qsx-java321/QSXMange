@@ -1,44 +1,45 @@
 # QSXManager 全项目主线 - 总总结
 
-> 类型：全项目总总结（稳定文件名，随里程碑更新）｜ 最近更新：2026-09-17
+> 类型：全项目总总结（稳定文件名，随里程碑更新）｜ 最近更新：2026-09-23
 > **读者导航**：想快速了解项目全貌、当前状态、跨阶段决策与共性坑 → 读本文件；想查某阶段的实施细节 / 测试报告 → 读下方「阶段导航」指向的对应增量文件（增量保留作历史快照，不删除）。
 
-## 〇、项目现状快照（截至 2026-09-17）
+## 〇、项目现状快照（截至 2026-09-23）
 
-- **定位**：**用户后台管理基础 demo**——单体单模块、前后端分离，为其他项目提供可直接复用的认证/授权/用户/会话基座（Spring Boot 3.5.16 / Java 21 / MyBatis-Plus / MySQL 8.4 / Redis / **无 JWT，令牌为随机串**），根包 `com.qsx`，分支 `master`
-- **已完成七大模块**：认证中心（双令牌会话）→ RBAC 权限（权限码 + 菜单树复用一表）→ 操作日志（AOP 审计）→ Excel 批量导入导出 → 权限缓存（Redis）→ 会话管理（登出 / 强制登出 / 禁用解冻保护）→ **双 token 有状态会话（Redis 唯一真相源，吊销即时生效）**
+- **定位**：**用户后台管理基础 demo**——单体多模块（5 模块，qsx-admin → module-system → framework → security → common）、前后端分离，为其他项目提供可直接复用的认证/授权/用户/会话基座（Spring Boot 3.5.16 / Java 21 / MyBatis-Plus / MySQL 8.4 / Redis / **无 JWT，令牌为随机串**），根包 `com.qsx`，分支 `master`
+- **已完成七大模块**：认证中心（双令牌会话）→ RBAC 权限（权限码 + 菜单树复用一表）→ 操作日志（AOP 审计）→ Excel 批量导入导出 → 权限缓存（Redis）→ 会话管理（登出 / 强制登出 / 禁用解冻保护）→ **双 token 有状态会话（Redis 唯一真相源，吊销即时生效）**；**规划中**：邮箱验证码（注册 / 忘记密码 / 改密通道 B）
+- **环境中间件**（Docker，2026-09-23 核验）：mysql / redis / rabbitmq / kafka / seaweedfs / **mailpit（v1.31，本地假 SMTP，SMTP 1025 + Web UI 8025，卷 mailpit-data，unless-stopped 自启）**；组件清单见 `docs/dev-env/组件依赖README.md`
 - **工程记忆红线**（项目 memory / wrap 技能固化，本文件不重复抄写）：权限表只读、ADMIN 禁删、整表替换授权、逻辑删除释放邮箱、AFTER_COMMIT 失效缓存、fail-open 权限缓存 / fail-closed 会话、测试双轨制
-- **最新提交**：`814992d`（权限缓存失效断链修复）、`40bcfc0`~`b03d1ec`（双 token 会话改造 M1~M5）、`502e26c`（审查 P0/P1 修复）、`2eaae88`（P2 修复）、`84ce032`（delete 保护补齐 + 用户/会话双轨测试收尾）、本次（内置超管保护绕过修复）；自动化用例 **138/138** 全绿
+- **最新提交**：`c7245c1`（验证码功能计划会话总结）、`74604e4`（验证码功能改造计划方案，参考性未实行）、`814992d`（权限缓存失效断链修复）、`40bcfc0`~`b03d1ec`（双 token 会话改造 M1~M5）、`502e26c`（审查 P0/P1 修复）、`2eaae88`（P2 修复）、`84ce032`（delete 保护补齐 + 用户/会话双轨测试收尾）；自动化用例 **171/171** 全绿（见 `docs/test/项目测试报告.md`）
 
 ## 一、发展阶段脉络（时间线主线）
 
 ### 阶段 1 · 基础版（09-10）：工程 + 认证中心 + 用户管理
 从 0 搭建（统一 Result/异常、JWT 认证、用户 CRUD），确立「逻辑删除释放邮箱」「唯一邮箱即账号」等基石。35 用例全过。
-→ 细节见 `会话总结-qsxmanager-20260910.md`
+→ 历史细节与测试详见 `docs/test/项目测试报告.md`（早期增量总结已并入主线，不再独立存文；早期独家根因见该报告 §5.1 历史期 H1/H2）
 
 ### 阶段 2 · RBAC 权限管理（09-10）
 新增 4 表成标准 RBAC 5 表；确立**权限码模型** + `@PreAuthorize` 方法级鉴权 + 每请求查库即时生效；`ADMIN` 角色绑定全量权限（非硬编码）；内置超管禁删。40 用例全过。
-→ 细节见 `会话总结-qsxmanager-rbac-20260910.md`
+→ 历史细节与测试详见 `docs/test/项目测试报告.md` §1.4 覆盖矩阵（早期阶段已归档，见 §8.2）
 
 ### 阶段 3 · 菜单管理（09-11）：动态路由菜单树
 **复用 `sys_permission` 表承载菜单**（type=MENU/PERMISSION，parent_id 成树），`/api/menus/current` 按权限过滤 + 补祖先链供前端动态路由；防环、有子禁删。48 用例全过。
-→ 细节见 `会话总结-qsxmanager-menu-20260911.md`
+→ 历史细节与测试详见 `docs/test/项目测试报告.md` §1.4 覆盖矩阵（早期阶段已归档，见 §8.2）
 
 ### 阶段 4 · 操作日志（09-11）：AOP 访问审计
 包级切面（非注解）全量审计 + `@Async` 异步落库 + 401/403/400 三处补记；日志表不可变。15 个真实穿透场景验证。
-→ 细节见 `会话总结-qsxmanager-log-20260911.md` + `测试报告-qsxmanager-log-20260911.md`
+→ 历史细节与测试详见 `docs/test/项目测试报告.md` §5.1（历史期 H1：400 补记根因）
 
 ### 阶段 5 · Excel 批量导入导出（09-12）
 EasyExcel 流式（文件不落盘）、整批校验整体拒绝、模板含角色列、默认密码配置化；同期 `docs/` 目录整理（`.trae/` gitignore、session-notes 按类别分文件夹）。63 用例全过。
-→ 细节见 `会话总结-qsxmanager-excel-20260912.md` + `测试报告-qsxmanager-excel-20260912.md`
+→ 历史细节与测试详见 `docs/test/项目测试报告.md` §5.1（历史期 H2：Excel 行号偏移根因）
 
 ### 阶段 6 · RBAC 权限缓存（09-12，Redis）
 三处读取点收口 `PermissionCacheService.load`（Redis 优先 + 回源回填 + 空权限防穿透 + enabled 开关）；`AFTER_COMMIT` 事件精确失效；同步补事务注解修复整表替换原子性问题。66 用例 + 真实 HTTP 38 调用全过。
-→ 细节见 `会话总结-qsxmanager-redis-20260912.md` + `docs/test/test-report.md`（该阶段实施计划已随完成归档删除）
+→ 历史细节与测试已并入主线（该阶段实施计划已随完成归档删除）
 
 ### 阶段 7 · 会话管理（09-13，refresh token）：登出 / 强踢 / 禁用解冻
 **双令牌会话**：access 30min + refresh（Redis 哈希、单端、滑动 7d + 30d 上限、轮换语义、fail-closed）。新增 `/auth/refresh`、`/auth/logout`、`/api/users/{id}/kick`（user:kick）。**禁用=status 赋值**（自带踢下线），补禁用自己/超管保护。85 用例全过 + 真实 HTTP 全链路。
-→ 细节见 `会话总结-qsxmanager-refresh-20260913.md`
+→ 历史细节见 `docs/design/springboot项目设计.md`（认证/会话流程）
 
 ### 阶段 8 · 权限缓存失效断链修复（09-16）
 事件载荷由「角色/权限 id」改为「发布方预先反查的 userId 集合」：原实现删角色/权限时先清关联表，AFTER_COMMIT 再回查必然得到空集 → 已回收的权限仍生效至 TTL 到期。同步补权限标识变更的失效与事务，反查下沉 mapper 消除 N+1。88 用例全绿（新增 3 例，已验证修复前精确失败）。
@@ -46,26 +47,35 @@ EasyExcel 流式（文件不落盘）、整批校验整体拒绝、模板含角�
 
 ### 阶段 9 · 双 token 有状态会话改造（09-16）：吊销即时生效
 认证从「无状态 JWT + Redis 哈希型 refresh」切换为 **Redis 为唯一真相源的随机串双 token**（at/rt/session 三键，Lua 原子脚本）：登出/踢人/禁用/删除/改密后旧 access token **立即失效**。废除 jjwt 全链路；refresh 入参收敛为 `{refreshToken}`。顺带消除「踢下线被在途刷新撤销」的既有竞态。109 用例全绿 + 真实 HTTP 八组场景。
-→ 细节见 `会话总结-qsxmanager-session-refactor-20260916.md` + `docs/test/test-report.md`
+→ 历史细节见 `docs/design/springboot项目设计.md`（认证/会话流程）
 
 ### 阶段 10 · 双 token 机制代码审查与修复（09-17）
 以双 token 为核心的多角度代码审查（逐行/跨文件/被移除行为/语言陷阱/封装/复用/简化/效率/规范/抽象高度），并逐条运行时复现。**P0**：`status` 无取值约束 + 「禁用」谓词两套（`!=0` vs `==1`）→ 传 `status=2` 可绕过禁用保护（禁用超管、禁用自己）且不清理会话、解冻后旧令牌复活，最坏可锁死系统；**P1** 4 项：refresh 两处异常码不一致、`@Pattern` 破坏 1019 契约、改密清理失败静默、会话配置无防呆。全部已修。**P2** 又修 4 项既有缺陷：停用角色不回收权限（权限查询未过滤 `sys_role.status`）、标识可被改名锁死接口（含角色编码改名可绕过超管保护）、`delete()` 会话清理在事务内、Redis 故障时 401 逐条写库放大；用例 109→115。核心机制本身未发现缺陷。
-→ 细节见 `会话总结-qsxmanager-review-fix-20260917.md`
+→ 历史细节见 `docs/design/springboot项目设计.md`（认证/会话流程）
 
 ### 阶段 11 · 用户/会话双轨测试 & delete 保护补齐（09-17）
-对用户管理与会话管理做审读，发现 `delete()` 相比 `update`(1020)、`kick`(1021) **缺少超管保护**（保护不对称）。补齐：`ResultCode` 新增 `1025 内置超管用户不可删除`，`delete()` 先判删自己→1022、再判删内置超管→1025，口径与禁用/踢人一致。配套新增 `UserEdgeTest`（15 例：创建校验/分页越界/assignRoles 边界与回滚/**空角色清空+权限即时回收**/删除清会话/delete 保护）。完成 **Maven 130/130** + **真实 HTTP 40+ 调用双轨**专项测试；机制说明与专项报告分别落盘 `docs/design/`、`docs/test/`。数据库与 Redis 测试数据清理干净，种子数据完好。
-→ 细节见 `会话总结-qsxmanager-用户会话双轨测试-20260917.md` + `docs/design/用户与会话管理机制说明.md` + `docs/test/用户与会话-真实HTTP测试报告.md`
+对用户管理与会话管理做审读，发现 `delete()` 相比 `update`(1020)、`kick`(1021) **缺少超管保护**（保护不对称）。补齐：`ResultCode` 新增 `1025 内置超管用户不可删除`，`delete()` 先判删自己→1022、再判删内置超管→1025，口径与禁用/踢人一致。配套新增 `UserEdgeTest`（15 例：创建校验/分页越界/assignRoles 边界与回滚/**空角色清空+权限即时回收**/删除清会话/delete 保护）。完成 **Maven 130/130** + **真实 HTTP 40+ 调用双轨**专项测试；机制说明与专项报告已合并入 `docs/design/springboot项目设计.md` 与 `docs/test/项目测试报告.md`。数据库与 Redis 测试数据清理干净，种子数据完好。
+→ 历史细节见 `docs/design/springboot项目设计.md` + `docs/test/项目测试报告.md`
 
 ### 阶段 12 · 内置超管保护绕过修复（09-17）
 审读用户/角色管理时发现：超管三条保护（1020 不可禁用 / 1021 不可强制登出 / 1025 不可删除）统一用 `selectRoleCodes(id).contains("ADMIN")` 做**身份判定**，而该查询带 `AND r.status = 0`——那是**授权判定**的正确语义。两者复用同一条查询导致语义错位：**ADMIN 角色一旦被停用，该查询返回空集，三条保护同时静默失效**，操作者随即可以禁用/删除/踢掉超管账号（实测确认：回退修复后三个接口均返回 200，即操作真的成功了）。且 `RoleServiceImpl.update` 原本允许停用 ADMIN 角色——停用后所有「仅经该角色获得权限」的用户立即失去 `role:update`，若无人另有权限来源，系统被锁死在「无人可管理权限」，只能改库恢复。
 
 修复两道闸：① `UserMapper.existsRoleCode`（**刻意不过滤 `r.status`**）承担身份判定，与授权查询严格分工；② `RoleServiceImpl.update` 在实体变更前拦截停用内置超管角色（`ResultCode` 新增 `1026 内置超管角色不可停用`）。配套 `AdminProtectionTest`（8 例）：三条保护的停用态回归、**机制层断言两条查询语义分离**、1026 拦截、不误伤普通角色的反向回归、以及「操作者仅持自定义角色」的端到端真实攻击路径。用例 130→138，全量 138/138 通过。
-→ 细节见 `会话总结-qsxmanager-基础功能核验与超管保护修复-20260917.md` + `docs/design/用户与会话管理机制说明.md` §4.3
+→ 历史细节见 `docs/design/springboot项目设计.md`（保护矩阵）
+
+### 阶段 13 · 邮箱验证码功能计划方案（09-22，规划中未实行）
+参考性计划文档：通用验证码服务（发送/存储/校验）、注册 + 忘记密码 + 改密通道 B 接入、`{scene}:{email}` 双维度 Redis key + Lua 原子校验、防枚举统一响应、10/30 系列规划业务码、全量测试迁移清单（8.1/8.2）、自审 7 项修正。**未实现任何代码**；提交 `74604e4`（方案）+ `c7245c1`（会话总结）。
+→ 细节见 `docs/design/验证码功能改造计划方案.md`（规划期会话总结已删除，内容并入本文件与方案文档）
+
+### 阶段 14 · Mailpit 部署 + 验证码方案发送通道升级（09-23，规划中未实行）
+Docker 部署本地假 SMTP `axllent/mailpit:v1.31`（SMTP 1025 / Web UI 8025，卷 mailpit-data，unless-stopped 自启，支持手动 `docker stop/start`），用于拦截验证码邮件、本地取码；组件文档 `docs/dev-env/组件依赖README.md` 补 Mailpit 全套（部署命令/参数表/Spring Mail 对接/数据卷/console 链接）。验证码方案发送通道从「debug 直返」升级为「**MailCaptchaSender（JavaMailSender + `@Async` 异步投 Mailpit localhost:1025）为主，debug 直返降级为 `qsx.captcha.debug` 条件装配兜底**」，新增独立线程池 `captchaMailExecutor`（2~4 线程）、生产红线段（`spring.mail.host` 不得指向 localhost:1025、debug 启动即拒）、端到端验收（Mailpit 8025 实际收到邮件）。仍未实现任何代码；2 个文档改动未提交。
+→ 细节见 `docs/design/验证码功能改造计划方案.md` §3.3/§3.6 + `docs/dev-env/组件依赖README.md`（规划期会话总结已删除，内容并入本文件）
 
 ## 二、跨阶段关键决策与演进（横切视角）
 
 - **数据模型演进**：`sys_user` 单表 → RBAC 5 表（关系表物理删除）→ `sys_permission` 一表两用（菜单+按钮权限）→ 日志表不可变
 - **认证演进**：单 JWT 24h 无状态 → 权限每请求查库 → 权限 Redis 缓存（fail-open 降级）→ 双令牌会话（会话层 fail-closed）→ **有状态随机串双 token（Redis 唯一真相源，AT 可即时吊销）**
+- **验证码发送通道演进（规划期）**：debug 直返（09-22 定稿，因无邮件设施）→ **Mailpit 本地 SMTP + `@Async` 异步投递为主（09-23，mailpit 就位后回查升级）**，debug 直返降级为条件装配兜底；端口抽象 `CaptchaSender` 保证未来切真实邮件服务零业务改动
 - **鉴权模式（贯穿）**：权限码 + `@PreAuthorize`，ADMIN 绑定全量权限——新增权限须同步 init.sql 预置（INSERT IGNORE + 自动绑 ADMIN）
 - **「变更即时生效」原则**：权限靠每请求加载 + AFTER_COMMIT 失效；禁用靠每请求查库 status；因此权限变更不需要踢人
 - **测试体系演进**：35 → 40 → 48 → 63 → 66 → 85 → 88 → 109 → 115 → 130 → **138** 用例；MockMvc + 真实 MySQL/Redis 集成测试 + 真实 HTTP 双轨制；`adminToken()` 走真实 assignRoles 链路；会话层 Lua 有专项直连测试（含并发双花）
