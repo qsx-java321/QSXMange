@@ -81,7 +81,7 @@ Docker 部署本地假 SMTP `axllent/mailpit:v1.31`（SMTP 1025 / Web UI 8025，
 - **P4 回归与文档**：全量 **204 例全绿**；真实 HTTP 双轨验收 20 笔（含 Mailpit 实收邮件正文、旧令牌 401 与 Redis 三键消失的机制层断言、防枚举响应逐字段一致）；README / CLAUDE.md / 设计文档 / 测试报告四件套同步。
 
 规划期两处硬缺陷在此被修正（邮件依赖应加在 `qsx-module-system` 而非 `qsx-admin`、两个投递实现的条件装配必须互斥），并顺带修掉一条文档缺陷：多模块下 `mvn test -Dtest=X` 必然 BUILD FAILURE。
-→ 细节见 `docs/design/04-邮箱验证码.md` 与 `docs/test/项目测试报告.md` §九（R5 轮次）
+→ 细节见 `docs/design/04-邮箱验证码.md` 与 `docs/test/项目测试报告.md` §九（R5 轮次）；本次会话的完整复盘（踩坑清单与决策记录）见同目录 `会话总结-验证码功能实施与文档重构-20260927.md`
 
 ## 二、跨阶段关键决策与演进（横切视角）
 
