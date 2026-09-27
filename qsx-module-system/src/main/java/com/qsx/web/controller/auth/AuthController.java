@@ -4,6 +4,7 @@ import com.qsx.common.result.Result;
 import com.qsx.service.AuthService;
 import com.qsx.web.dto.request.CaptchaSendRequest;
 import com.qsx.web.dto.request.ChangePasswordRequest;
+import com.qsx.web.dto.request.ForgotPasswordRequest;
 import com.qsx.web.dto.request.LoginRequest;
 import com.qsx.web.dto.request.RefreshRequest;
 import com.qsx.web.dto.request.RegisterRequest;
@@ -55,6 +56,16 @@ public class AuthController {
     @PostMapping("/refresh")
     public Result<RefreshVO> refresh(@Valid @RequestBody RefreshRequest request) {
         return Result.success(authService.refresh(request));
+    }
+
+    /**
+     * 忘记密码（匿名重置，走邮箱验证码）。
+     * 成功后该用户全部会话被销毁，且不自动登录——前端应引导用新密码重新登录。
+     */
+    @PostMapping("/forgot-password")
+    public Result<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        authService.forgotPassword(request);
+        return Result.success();
     }
 
     @PostMapping("/logout")

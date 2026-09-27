@@ -18,6 +18,7 @@ import com.qsx.service.UserService;
 import com.qsx.service.captcha.CaptchaRedisKeys;
 import com.qsx.web.dto.request.CaptchaSendRequest;
 import com.qsx.web.dto.request.ChangePasswordRequest;
+import com.qsx.web.dto.request.ForgotPasswordRequest;
 import com.qsx.web.dto.request.LoginRequest;
 import com.qsx.web.dto.request.RefreshRequest;
 import com.qsx.web.dto.request.RegisterRequest;
@@ -192,6 +193,37 @@ public class AuthServiceImpl implements AuthService {
         vo.setToken(session.accessToken());
         vo.setRefreshToken(session.refreshToken());
         return vo;
+    }
+
+    @Override
+    public void forgotPassword(ForgotPasswordRequest request) {
+        // 一致性校验放 Service（不放 DTO 的 @AssertTrue）：DTO 校验失败会统一压成 400，
+        // 拿不到 1030 这个专用业务码
+        if (!request.getNewPassword().equals(request.getConfirmPassword())) {
+            throw new BusinessException(ResultCode.PASSWORD_NOT_MATCH);
+        }
+
+        // 验证码校验：未注册邮箱在发码阶段就被静默跳过（不落码），此处必然落到 MISS，
+        // 与「码已过期 / 填错」返回同一个 1028 与同一句文案 —— 天然不泄露邮箱是否已注册
+        captchaService.verify(CaptchaScene.FORGOT_PASSWORD, request.getEmail(), request.getCaptcha());
+
+        User user = userService.getByEmail(request.getEmail());
+        if (user == null) {
+            // 走到这里只有一种可能：发码之后、重置之前用户被删了（并发窗口）。
+            // 同样返回 1028 而不是「用户不存在」，避免把邮箱注册状态泄露出去
+            throw new BusinessException(ResultCode.CAPTCHA_INVALID);
+        }
+
+        userService.updatePassword(user.getId(), passwordEncoder.encode(request.getNewPassword()));
+
+        // 重置密码与改密同属「止损事件」：旧密码可能已泄露，必须注销该用户全部会话，
+        // 否则已流出的令牌最长还能续期到 30 天绝对上限（五入口统一收口，不开例外）。
+        // 失败只 ERROR 告警不阻断：密码已经改成功了，此时把接口报错反而让用户以为重置失败
+        try {
+            authSessionService.remove(user.getId());
+        } catch (Exception e) {
+            log.error("重置密码后清理会话失败：旧令牌仍有效，止损未生效, userId={}", user.getId(), e);
+        }
     }
 
     @Override

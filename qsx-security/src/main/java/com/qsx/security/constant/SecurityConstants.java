@@ -32,6 +32,9 @@ public final class SecurityConstants {
      */
     public static final String CAPTCHA_URL = "/auth/captcha";
 
+    /** 忘记密码重置接口（匿名放行）：凭「邮箱 + 验证码」重置密码，无需登录态 */
+    public static final String FORGOT_PASSWORD_URL = "/auth/forgot-password";
+
     /**
      * 请求属性：认证链路因**基础设施异常**（如 Redis 不可达）而判为未认证。
      * 此类 401 不写操作日志——故障期间 100% 请求都会 401，

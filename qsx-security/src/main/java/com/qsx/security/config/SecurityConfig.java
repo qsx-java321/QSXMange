@@ -68,7 +68,8 @@ public class SecurityConfig {
                 // 授权规则
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SecurityConstants.REGISTER_URL, SecurityConstants.LOGIN_URL,
-                                SecurityConstants.REFRESH_URL, SecurityConstants.CAPTCHA_URL).permitAll()
+                                SecurityConstants.REFRESH_URL, SecurityConstants.CAPTCHA_URL,
+                                SecurityConstants.FORGOT_PASSWORD_URL).permitAll()
                         .anyRequest().authenticated())
                 // 添加令牌认证过滤器
                 .addFilterBefore(tokenAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

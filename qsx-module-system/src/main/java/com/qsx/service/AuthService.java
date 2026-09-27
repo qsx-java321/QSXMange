@@ -2,6 +2,7 @@ package com.qsx.service;
 
 import com.qsx.web.dto.request.CaptchaSendRequest;
 import com.qsx.web.dto.request.ChangePasswordRequest;
+import com.qsx.web.dto.request.ForgotPasswordRequest;
 import com.qsx.web.dto.request.LoginRequest;
 import com.qsx.web.dto.request.RefreshRequest;
 import com.qsx.web.dto.request.RegisterRequest;
@@ -37,6 +38,15 @@ public interface AuthService {
      * 旧 refresh token 一经使用立即失效（严格轮换，前端须保证刷新请求单飞）。
      */
     RefreshVO refresh(RefreshRequest request);
+
+    /**
+     * 忘记密码（匿名重置）：邮箱 + 验证码 + 新密码。
+     *
+     * <p>成功后**不自动登录**，且该用户的全部会话被销毁（客户端契约：重置成功即所有旧令牌失效）。
+     *
+     * @throws com.qsx.common.exception.BusinessException 1030 两次密码不一致；1028 验证码无效
+     */
+    void forgotPassword(ForgotPasswordRequest request);
 
     /**
      * 登出：清理当前用户的会话三键（qsx:auth:at/rt/session），access token 立即失效
