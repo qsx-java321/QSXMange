@@ -39,7 +39,7 @@ EasyExcel 流式（文件不落盘）、整批校验整体拒绝、模板含角�
 
 ### 阶段 7 · 会话管理（09-13，refresh token）：登出 / 强踢 / 禁用解冻
 **双令牌会话**：access 30min + refresh（Redis 哈希、单端、滑动 7d + 30d 上限、轮换语义、fail-closed）。新增 `/auth/refresh`、`/auth/logout`、`/api/users/{id}/kick`（user:kick）。**禁用=status 赋值**（自带踢下线），补禁用自己/超管保护。85 用例全过 + 真实 HTTP 全链路。
-→ 历史细节见 `docs/design/springboot项目设计.md`（认证/会话流程）
+→ 历史细节见 `docs/design/02-认证与会话.md`
 
 ### 阶段 8 · 权限缓存失效断链修复（09-16）
 事件载荷由「角色/权限 id」改为「发布方预先反查的 userId 集合」：原实现删角色/权限时先清关联表，AFTER_COMMIT 再回查必然得到空集 → 已回收的权限仍生效至 TTL 到期。同步补权限标识变更的失效与事务，反查下沉 mapper 消除 N+1。88 用例全绿（新增 3 例，已验证修复前精确失败）。
@@ -47,32 +47,32 @@ EasyExcel 流式（文件不落盘）、整批校验整体拒绝、模板含角�
 
 ### 阶段 9 · 双 token 有状态会话改造（09-16）：吊销即时生效
 认证从「无状态 JWT + Redis 哈希型 refresh」切换为 **Redis 为唯一真相源的随机串双 token**（at/rt/session 三键，Lua 原子脚本）：登出/踢人/禁用/删除/改密后旧 access token **立即失效**。废除 jjwt 全链路；refresh 入参收敛为 `{refreshToken}`。顺带消除「踢下线被在途刷新撤销」的既有竞态。109 用例全绿 + 真实 HTTP 八组场景。
-→ 历史细节见 `docs/design/springboot项目设计.md`（认证/会话流程）
+→ 历史细节见 `docs/design/02-认证与会话.md`
 
 ### 阶段 10 · 双 token 机制代码审查与修复（09-17）
 以双 token 为核心的多角度代码审查（逐行/跨文件/被移除行为/语言陷阱/封装/复用/简化/效率/规范/抽象高度），并逐条运行时复现。**P0**：`status` 无取值约束 + 「禁用」谓词两套（`!=0` vs `==1`）→ 传 `status=2` 可绕过禁用保护（禁用超管、禁用自己）且不清理会话、解冻后旧令牌复活，最坏可锁死系统；**P1** 4 项：refresh 两处异常码不一致、`@Pattern` 破坏 1019 契约、改密清理失败静默、会话配置无防呆。全部已修。**P2** 又修 4 项既有缺陷：停用角色不回收权限（权限查询未过滤 `sys_role.status`）、标识可被改名锁死接口（含角色编码改名可绕过超管保护）、`delete()` 会话清理在事务内、Redis 故障时 401 逐条写库放大；用例 109→115。核心机制本身未发现缺陷。
-→ 历史细节见 `docs/design/springboot项目设计.md`（认证/会话流程）
+→ 历史细节见 `docs/design/02-认证与会话.md`
 
 ### 阶段 11 · 用户/会话双轨测试 & delete 保护补齐（09-17）
-对用户管理与会话管理做审读，发现 `delete()` 相比 `update`(1020)、`kick`(1021) **缺少超管保护**（保护不对称）。补齐：`ResultCode` 新增 `1025 内置超管用户不可删除`，`delete()` 先判删自己→1022、再判删内置超管→1025，口径与禁用/踢人一致。配套新增 `UserEdgeTest`（15 例：创建校验/分页越界/assignRoles 边界与回滚/**空角色清空+权限即时回收**/删除清会话/delete 保护）。完成 **Maven 130/130** + **真实 HTTP 40+ 调用双轨**专项测试；机制说明与专项报告已合并入 `docs/design/springboot项目设计.md` 与 `docs/test/项目测试报告.md`。数据库与 Redis 测试数据清理干净，种子数据完好。
-→ 历史细节见 `docs/design/springboot项目设计.md` + `docs/test/项目测试报告.md`
+对用户管理与会话管理做审读，发现 `delete()` 相比 `update`(1020)、`kick`(1021) **缺少超管保护**（保护不对称）。补齐：`ResultCode` 新增 `1025 内置超管用户不可删除`，`delete()` 先判删自己→1022、再判删内置超管→1025，口径与禁用/踢人一致。配套新增 `UserEdgeTest`（15 例：创建校验/分页越界/assignRoles 边界与回滚/**空角色清空+权限即时回收**/删除清会话/delete 保护）。完成 **Maven 130/130** + **真实 HTTP 40+ 调用双轨**专项测试；机制说明与专项报告已合并入 `docs/design/05-业务功能与保护矩阵.md` 与 `docs/test/项目测试报告.md`。数据库与 Redis 测试数据清理干净，种子数据完好。
+→ 历史细节见 `docs/design/05-业务功能与保护矩阵.md` + `docs/test/项目测试报告.md`
 
 ### 阶段 12 · 内置超管保护绕过修复（09-17）
 审读用户/角色管理时发现：超管三条保护（1020 不可禁用 / 1021 不可强制登出 / 1025 不可删除）统一用 `selectRoleCodes(id).contains("ADMIN")` 做**身份判定**，而该查询带 `AND r.status = 0`——那是**授权判定**的正确语义。两者复用同一条查询导致语义错位：**ADMIN 角色一旦被停用，该查询返回空集，三条保护同时静默失效**，操作者随即可以禁用/删除/踢掉超管账号（实测确认：回退修复后三个接口均返回 200，即操作真的成功了）。且 `RoleServiceImpl.update` 原本允许停用 ADMIN 角色——停用后所有「仅经该角色获得权限」的用户立即失去 `role:update`，若无人另有权限来源，系统被锁死在「无人可管理权限」，只能改库恢复。
 
 修复两道闸：① `UserMapper.existsRoleCode`（**刻意不过滤 `r.status`**）承担身份判定，与授权查询严格分工；② `RoleServiceImpl.update` 在实体变更前拦截停用内置超管角色（`ResultCode` 新增 `1026 内置超管角色不可停用`）。配套 `AdminProtectionTest`（8 例）：三条保护的停用态回归、**机制层断言两条查询语义分离**、1026 拦截、不误伤普通角色的反向回归、以及「操作者仅持自定义角色」的端到端真实攻击路径。用例 130→138，全量 138/138 通过。
-→ 历史细节见 `docs/design/springboot项目设计.md`（保护矩阵）
+→ 历史细节见 `docs/design/05-业务功能与保护矩阵.md`（保护矩阵）
 
 ### 阶段 13 · 邮箱验证码功能计划方案（09-22，规划中未实行）
 参考性计划文档：通用验证码服务（发送/存储/校验）、注册 + 忘记密码 + 改密通道 B 接入、`{scene}:{email}` 双维度 Redis key + Lua 原子校验、防枚举统一响应、10/30 系列规划业务码、全量测试迁移清单（8.1/8.2）、自审 7 项修正。**未实现任何代码**；提交 `74604e4`（方案）+ `c7245c1`（会话总结）。
-→ 细节见 `docs/design/验证码功能改造计划方案.md`（规划期会话总结已删除，内容并入本文件与方案文档）
+→ 细节见 `docs/design/04-邮箱验证码.md`（规划期会话总结与计划稿均已随交付归档删除，历史见 git 记录）
 
 ### 阶段 14 · Mailpit 部署 + 验证码方案发送通道升级（09-23，规划中未实行）
 Docker 部署本地假 SMTP `axllent/mailpit:v1.31`（SMTP 1025 / Web UI 8025，卷 mailpit-data，unless-stopped 自启，支持手动 `docker stop/start`），用于拦截验证码邮件、本地取码；组件文档 `docs/dev-env/组件依赖README.md` 补 Mailpit 全套（部署命令/参数表/Spring Mail 对接/数据卷/console 链接）。验证码方案发送通道从「debug 直返」升级为「**MailCaptchaSender（JavaMailSender + `@Async` 异步投 Mailpit localhost:1025）为主，debug 直返降级为 `qsx.captcha.debug` 条件装配兜底**」，新增独立线程池 `captchaMailExecutor`（2~4 线程）、生产红线段（`spring.mail.host` 不得指向 localhost:1025、debug 启动即拒）、端到端验收（Mailpit 8025 实际收到邮件）。仍未实现任何代码；2 个文档改动未提交。
-→ 细节见 `docs/design/验证码功能改造计划方案.md` §3.3/§3.6 + `docs/dev-env/组件依赖README.md`（规划期会话总结已删除，内容并入本文件）
+→ 细节见 `docs/design/04-邮箱验证码.md` §4 + `docs/dev-env/组件依赖README.md`（计划稿已随交付归档删除）
 
 ### 阶段 15 · 邮箱验证码功能实施（09-27）：注册 / 忘记密码 / 改密通道 B
-按 `docs/design/验证码功能实施方案.md`（定稿，逐条核对代码后重写）分四阶段落地，每阶段一次提交、全量转绿：
+按实施前定稿的方案（已随交付归档删除，结论并入 `docs/design/04-邮箱验证码.md`）分四阶段落地，每阶段一次提交、全量转绿：
 
 - **P0 验证码内核**（`21660ba`）：Redis 四键（code / attempt / limit / daily）+ 两条 Lua 原子脚本（发送侧限流与落码、校验侧用后即焚）；`EmailService` 端口 + `SmtpEmailService`（本地 Mailpit 与线上真实邮箱**共用**，切换只改 `spring.mail.*`）/ `DebugEmailService`（`qsx.captcha.debug=true` 时响应直返），条件装配互斥；独立线程池 `captchaMailExecutor`；`POST /auth/captcha`；错误码 1027~1032。顺带把「请求体无法绑定」从兜底 500 修成 400。
 - **P1 注册接入**（`08e0b22`）：注册需邮箱验证码，顺序定为「唯一性 → 验证码」（校验成功即用后即焚，先校验会把用户手里那张有效的码烧掉）；测试 helper 改为真实发码链路，8 个测试类的调用点零改动。
@@ -81,7 +81,7 @@ Docker 部署本地假 SMTP `axllent/mailpit:v1.31`（SMTP 1025 / Web UI 8025，
 - **P4 回归与文档**：全量 **204 例全绿**；真实 HTTP 双轨验收 20 笔（含 Mailpit 实收邮件正文、旧令牌 401 与 Redis 三键消失的机制层断言、防枚举响应逐字段一致）；README / CLAUDE.md / 设计文档 / 测试报告四件套同步。
 
 规划期两处硬缺陷在此被修正（邮件依赖应加在 `qsx-module-system` 而非 `qsx-admin`、两个投递实现的条件装配必须互斥），并顺带修掉一条文档缺陷：多模块下 `mvn test -Dtest=X` 必然 BUILD FAILURE。
-→ 细节见 `docs/design/验证码功能实施方案.md` §0（差异清单）与 `docs/test/项目测试报告.md` §九（R5 轮次）
+→ 细节见 `docs/design/04-邮箱验证码.md` 与 `docs/test/项目测试报告.md` §九（R5 轮次）
 
 ## 二、跨阶段关键决策与演进（横切视角）
 
