@@ -9,7 +9,7 @@
   登出 / 踢人 / 禁用 / 删除 / 改密 / 重置密码后，旧 access token **立即失效**（不是等 30 分钟过期）。
 - **ADMIN 超管不是硬编码**：通过绑定全量权限实现，与普通角色走完全相同的判定路径。
 - **邮箱验证码**：注册、忘记密码、改密通道 B 三个自助流程，验证码四键 + 两条 Lua 原子脚本。
-- 204 例自动化集成测试 + 191 条真实 HTTP 逐笔记录锁定行为（详见[测试报告](docs/test/项目测试报告.md)）。
+- 204 例自动化集成测试 + 230 条真实 HTTP 逐笔记录锁定行为（详见[测试报告](docs/test/项目测试报告.md)）。
 
 ## 技术栈
 
@@ -144,6 +144,6 @@ mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false  # 单个
 | 文档 | 定位 |
 | :--- | :--- |
 | [docs/design/](docs/design/) | **详细设计文档**：架构与模块划分 · 认证与会话 · 授权与 RBAC · 邮箱验证码 · 业务功能与保护矩阵 · 基础设施、审计与测试 |
-| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 测试总报告：36 接口覆盖矩阵、204 例基线、191 条真实 HTTP 逐笔明细 |
+| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 测试总报告：36 接口覆盖矩阵、204 例基线、230 条真实 HTTP 逐笔明细（R1~R6，含注册/登录/验证码专项轮次 §十） |
 | [docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md](docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md) | 全项目主线总览（发展阶段、跨阶段决策与教训） |
 | [docs/dev-env/组件依赖README.md](docs/dev-env/组件依赖README.md) | Docker 中间件清单与启停（MySQL / Redis / Mailpit 等） |
