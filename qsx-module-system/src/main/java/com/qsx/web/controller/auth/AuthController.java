@@ -2,10 +2,12 @@ package com.qsx.web.controller.auth;
 
 import com.qsx.common.result.Result;
 import com.qsx.service.AuthService;
+import com.qsx.web.dto.request.CaptchaSendRequest;
 import com.qsx.web.dto.request.ChangePasswordRequest;
 import com.qsx.web.dto.request.LoginRequest;
 import com.qsx.web.dto.request.RefreshRequest;
 import com.qsx.web.dto.request.RegisterRequest;
+import com.qsx.web.vo.CaptchaVO;
 import com.qsx.web.vo.LoginVO;
 import com.qsx.web.vo.RefreshVO;
 import com.qsx.web.vo.UserVO;
@@ -33,6 +35,16 @@ public class AuthController {
     public Result<Void> register(@Valid @RequestBody RegisterRequest request) {
         authService.register(request);
         return Result.success();
+    }
+
+    /**
+     * 发送邮箱验证码（匿名放行；CHANGE_PASSWORD 场景要求登录态，由业务层判定）。
+     * 正常模式下 data 为 null，仅调试模式返回 code。
+     */
+    @PostMapping("/captcha")
+    public Result<CaptchaVO> captcha(@Valid @RequestBody CaptchaSendRequest request) {
+        String code = authService.sendCaptcha(request);
+        return Result.success(code == null ? null : new CaptchaVO(code));
     }
 
     @PostMapping("/login")

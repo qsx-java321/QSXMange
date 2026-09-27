@@ -9,6 +9,7 @@ import com.qsx.mapper.RoleMapper;
 import com.qsx.mapper.UserMapper;
 import com.qsx.mapper.UserRoleMapper;
 import com.qsx.security.session.AuthRedisKeys;
+import com.qsx.service.captcha.CaptchaRedisKeys;
 import com.qsx.service.UserService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -69,11 +70,22 @@ public abstract class BaseIntegrationTest {
     /** RBAC 权限缓存 key 前缀（与 PermissionCacheServiceImpl 保持一致） */
     private static final String RBAC_CACHE_KEY_PREFIX = "qsx:auth:perm:";
 
-    /** 会话三键前缀（与 AuthRedisKeys 保持一致）：access token / refresh token / 会话索引 */
-    private static final List<String> SESSION_KEY_PREFIXES = List.of(
+    /**
+     * 需要在每个用例前后清空的 Redis 前缀清单。
+     *
+     * 注意这是**显式枚举**而非 `qsx:auth:*` 通配：新增一类键时必须在此登记，
+     * 否则会跨用例残留——例如验证码的发送间隔与当日计数残留会让
+     * 「重发覆盖」「60s 限流」「错 5 次作废」这类用例随机转红。
+     */
+    private static final List<String> REDIS_KEY_PREFIXES = List.of(
+            // RBAC 权限缓存
+            RBAC_CACHE_KEY_PREFIX,
+            // 会话三键：access token / refresh token / 会话索引
             AuthRedisKeys.AT_PREFIX,
             AuthRedisKeys.RT_PREFIX,
-            AuthRedisKeys.SESSION_PREFIX);
+            AuthRedisKeys.SESSION_PREFIX,
+            // 邮箱验证码四键：code / attempt / limit / daily
+            CaptchaRedisKeys.PREFIX);
 
     /** 测试用户邮箱特征（uniqueEmail 生成），用于把测试数据与预置种子数据隔离 */
     private static final String TEST_EMAIL_LIKE = "%@test.com%";
@@ -96,7 +108,7 @@ public abstract class BaseIntegrationTest {
         cleanTestUsers();
         cleanTestRoles();
         cleanOperationLog();
-        cleanPermissionCache();
+        cleanRedisKeys();
     }
 
     @AfterEach
@@ -104,7 +116,7 @@ public abstract class BaseIntegrationTest {
         cleanTestUsers();
         cleanTestRoles();
         cleanOperationLog();
-        cleanPermissionCache();
+        cleanRedisKeys();
     }
 
     /**
@@ -151,15 +163,14 @@ public abstract class BaseIntegrationTest {
     }
 
     /**
-     * 清理 RBAC 权限缓存与会话三键（避免跨用例污染）。
+     * 清理 Redis 中的权限缓存、会话三键与验证码键（避免跨用例污染）。
      *
      * 注意：认证链路现已依赖 Redis，Redis 不可用时本方法静默跳过，
      * 但需要登录态的用例会因 401 大批失败并暴露问题。
      */
-    private void cleanPermissionCache() {
+    private void cleanRedisKeys() {
         try {
-            scanAndDelete(RBAC_CACHE_KEY_PREFIX + "*");
-            for (String prefix : SESSION_KEY_PREFIXES) {
+            for (String prefix : REDIS_KEY_PREFIXES) {
                 scanAndDelete(prefix + "*");
             }
         } catch (Exception e) {

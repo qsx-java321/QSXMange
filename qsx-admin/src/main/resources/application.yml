@@ -23,6 +23,14 @@ spring:
       # Excel 导入上传大小限制
       max-file-size: 10MB
       max-request-size: 10MB
+  mail:
+    # 本地 Mailpit 假 SMTP（docs/dev-env/组件依赖README.md）：SMTP 1025 / Web UI 8025 取码
+    # 上线切真实邮箱：改这里即可，代码零改动（发件地址改 qsx.captcha.from-address）
+    # 注意：JavaMailSender 由本段存在与否决定是否装配，SmtpEmailService 强依赖它——删掉会导致启动失败
+    host: localhost
+    port: 1025
+    username: ""      # Mailpit 不校验账号密码
+    password: ""
 
 mybatis-plus:
   # Mapper XML 位置
@@ -52,6 +60,21 @@ qsx:
     enabled: true
     # 缓存兜底 TTL（主动失效优先，TTL 仅兜底）
     ttl: 30m
+  # 邮箱验证码配置（Redis + Lua，见 qsx-module-system/src/main/resources/lua/captcha_*.lua）
+  captcha:
+    # true = 不投递邮件，验证码随响应 data.code 直接返回（仅本地联调！）
+    # 切换后 Spring 装配 DebugEmailService 而非 SmtpEmailService，启动会打 WARN 横幅
+    debug: false
+    # 验证码有效期（⚠️ 纯数字会被当作毫秒：写 300 是 300 毫秒，不是 5 分钟）
+    ttl: 5m
+    # 同一张码允许错几次，达到即作废
+    max-attempts: 5
+    # 同场景同邮箱的发送间隔
+    send-interval: 60s
+    # 同场景同邮箱的每日发送上限
+    daily-limit: 10
+    # 发件地址（Mailpit 可用任意地址；真实服务商多数要求该地址已备案/校验）
+    from-address: no-reply@qsx.local
   # 双 token 会话配置（Redis 为令牌有效性的唯一真相源）
   auth:
     session:

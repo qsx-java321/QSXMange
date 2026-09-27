@@ -32,4 +32,26 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * 验证码邮件投递专用线程池。
+     *
+     * <p>独立于操作日志池：邮件投递受外部 SMTP 影响，耗时不可控，
+     * 与日志落库混用一个池会互相拖累（日志池的队列深度是按 DB 写入配的）。
+     *
+     * <p>刻意用小队列 + CallerRunsPolicy：验证码是用户正在等待的动作，
+     * **丢码比慢一拍更糟**（用户会卡在「收不到验证码」且无从重试）。
+     * 队列打满时由请求线程同步投递，仅损失异步性。与日志池策略保持一致。
+     */
+    @Bean("captchaMailExecutor")
+    public ThreadPoolTaskExecutor captchaMailExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(16);
+        executor.setThreadNamePrefix("cap-mail-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.initialize();
+        return executor;
+    }
 }

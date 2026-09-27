@@ -31,6 +31,14 @@
             <artifactId>easyexcel</artifactId>
         </dependency>
 
+        <!-- 验证码邮件投递：JavaMailSender 由本模块的 SmtpEmailService 使用。
+             依赖必须声明在本模块——依赖方向是 qsx-admin → qsx-module-system，
+             加在 qsx-admin 时本模块编译期取不到 JavaMailSender。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

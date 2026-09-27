@@ -58,7 +58,16 @@ public enum ResultCode {
     PERMISSION_CODE_IMMUTABLE(1023, "菜单或权限标识创建后不可修改，请新建并重新绑定"),
     ROLE_CODE_IMMUTABLE(1024, "角色编码创建后不可修改，请新建并重新绑定"),
     ADMIN_USER_CANNOT_DELETE(1025, "内置超管用户不可删除"),
-    ADMIN_ROLE_CANNOT_DISABLE(1026, "内置超管角色不可停用");
+    ADMIN_ROLE_CANNOT_DISABLE(1026, "内置超管角色不可停用"),
+
+    // 邮箱验证码 (1027 起)：通知类接口的语义是「验证码已发出」，与实名的用户/角色/菜单模块区分
+    CAPTCHA_SEND_TOO_FREQUENT(1027, "验证码发送过于频繁，请稍后再试"),
+    // 文案必须统一：不存在 / 已过期 / 填错一律同码同文案，避免客户端据此探测验证码状态
+    CAPTCHA_INVALID(1028, "验证码无效或已过期"),
+    CAPTCHA_ATTEMPT_EXCEEDED(1029, "验证码错误次数超限，请重新获取"),
+    PASSWORD_NOT_MATCH(1030, "两次输入的密码不一致"),
+    CHANGE_PASSWORD_CHANNEL_REQUIRED(1031, "修改密码需提供原密码或验证码之一"),
+    CAPTCHA_EMAIL_MISMATCH(1032, "该场景验证码仅限本人邮箱");
 
     private final int code;
     private final String message;

@@ -10,6 +10,7 @@ import com.qsx.security.port.AuthUserAccount;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -54,6 +55,19 @@ public class GlobalExceptionHandler {
         String message = fieldError == null ? "参数校验失败" : fieldError.getDefaultMessage();
         recordAccessLog(400, message);
         return Result.fail(400, message);
+    }
+
+    /**
+     * 请求体无法解析：JSON 语法错误，或字段类型不匹配（典型是枚举取值非法，如 scene 传了未定义的场景）
+     *
+     * <p>不加此处理器会落到兜底的 {@link #handleException}，把「客户端传错参数」
+     * 报成 500 系统异常——既误导调用方，也让监控把参数错误计成服务端故障。
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public Result<Void> handleNotReadable(HttpMessageNotReadableException e) {
+        log.warn("请求体解析失败: {}", e.getMessage());
+        recordAccessLog(400, ResultCode.BAD_REQUEST.getMessage());
+        return Result.fail(ResultCode.BAD_REQUEST);
     }
 
     /**

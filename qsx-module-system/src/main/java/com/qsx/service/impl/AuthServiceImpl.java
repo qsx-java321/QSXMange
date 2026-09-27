@@ -1,5 +1,6 @@
 package com.qsx.service.impl;
 
+import com.qsx.common.constant.CaptchaScene;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.ResultCode;
 import com.qsx.domain.entity.User;
@@ -12,7 +13,10 @@ import com.qsx.security.session.AuthSessionService;
 import com.qsx.security.util.SecurityUtils;
 import com.qsx.service.AuthService;
 import com.qsx.security.cache.PermissionCacheService;
+import com.qsx.service.CaptchaService;
 import com.qsx.service.UserService;
+import com.qsx.service.captcha.CaptchaRedisKeys;
+import com.qsx.web.dto.request.CaptchaSendRequest;
 import com.qsx.web.dto.request.ChangePasswordRequest;
 import com.qsx.web.dto.request.LoginRequest;
 import com.qsx.web.dto.request.RefreshRequest;
@@ -45,19 +49,57 @@ public class AuthServiceImpl implements AuthService {
     private final AuthenticationManager authenticationManager;
     private final AuthSessionService authSessionService;
     private final PermissionCacheService permissionCacheService;
+    private final CaptchaService captchaService;
 
     public AuthServiceImpl(UserService userService,
                            UserMapper userMapper,
                            PasswordEncoder passwordEncoder,
                            AuthenticationManager authenticationManager,
                            AuthSessionService authSessionService,
-                           PermissionCacheService permissionCacheService) {
+                           PermissionCacheService permissionCacheService,
+                           CaptchaService captchaService) {
         this.userService = userService;
         this.userMapper = userMapper;
         this.passwordEncoder = passwordEncoder;
         this.authenticationManager = authenticationManager;
         this.authSessionService = authSessionService;
         this.permissionCacheService = permissionCacheService;
+        this.captchaService = captchaService;
+    }
+
+    @Override
+    public String sendCaptcha(CaptchaSendRequest request) {
+        CaptchaScene scene = request.getScene();
+        String email = CaptchaRedisKeys.normalizeEmail(request.getEmail());
+
+        switch (scene) {
+            case REGISTER -> {
+                // 注册要求邮箱未被占用：直接复用注册接口的判定与文案（1001）
+                if (userService.getByEmail(email) != null) {
+                    throw new BusinessException(ResultCode.EMAIL_ALREADY_REGISTERED);
+                }
+            }
+            case CHANGE_PASSWORD -> {
+                // 该场景的码只能发给本人：未登录时 SecurityUtils 抛 401（
+                // /auth/captcha 在 URL 层 permitAll，但认证过滤器照常执行，
+                // 带合法令牌时 SecurityContext 里就有身份）
+                AuthUserAccount current = SecurityUtils.getCurrentUser();
+                if (current.email() == null || !email.equalsIgnoreCase(current.email())) {
+                    throw new BusinessException(ResultCode.CAPTCHA_EMAIL_MISMATCH);
+                }
+            }
+            case FORGOT_PASSWORD -> {
+                // 防枚举：邮箱未注册时**不落码、不投递**，对外仍是「发送成功」，
+                // 与已注册邮箱的响应完全一致。顺带避免本接口被打成垃圾邮件发射器
+                //（向任意地址投递的公开接口，是现成的滥用面）。
+                if (userService.getByEmail(email) == null) {
+                    log.info("重置密码发码：邮箱未注册，静默跳过（对外仍返回成功，防枚举）");
+                    return null;
+                }
+            }
+        }
+
+        return captchaService.send(scene, email);
     }
 
     @Override

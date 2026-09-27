@@ -1,5 +1,6 @@
 package com.qsx.service;
 
+import com.qsx.web.dto.request.CaptchaSendRequest;
 import com.qsx.web.dto.request.ChangePasswordRequest;
 import com.qsx.web.dto.request.LoginRequest;
 import com.qsx.web.dto.request.RefreshRequest;
@@ -17,6 +18,14 @@ public interface AuthService {
      * 注册
      */
     void register(RegisterRequest request);
+
+    /**
+     * 发送邮箱验证码（场景前置条件在此判定：注册要求邮箱未注册、
+     * 改密要求登录且邮箱为本人、忘记密码对未注册邮箱静默跳过以防枚举）。
+     *
+     * @return 验证码，**仅调试模式返回**（响应直返）；正常路径返回 null
+     */
+    String sendCaptcha(CaptchaSendRequest request);
 
     /**
      * 登录，返回 access token 与 refresh token（同一用户旧会话立即失效，单端登录）
