@@ -248,9 +248,25 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public void changePassword(ChangePasswordRequest request) {
         AuthUserAccount account = SecurityUtils.getCurrentUser();
-        if (!passwordEncoder.matches(request.getOldPassword(), account.password())) {
-            throw new BusinessException(ResultCode.OLD_PASSWORD_ERROR);
+
+        boolean byOldPassword = StringUtils.hasText(request.getOldPassword());
+        boolean byCaptcha = StringUtils.hasText(request.getCaptcha());
+        // 二选一：都传或都不传一律拒绝。都传时必须拒绝——否则无法判断用户意图，
+        // 更糟的是会让「两段校验里漏实现一段」的代码照样通过（另一段兜住了）。
+        if (byOldPassword == byCaptcha) {
+            throw new BusinessException(ResultCode.CHANGE_PASSWORD_CHANNEL_REQUIRED);
         }
+
+        if (byOldPassword) {
+            if (!passwordEncoder.matches(request.getOldPassword(), account.password())) {
+                throw new BusinessException(ResultCode.OLD_PASSWORD_ERROR);
+            }
+        } else {
+            // 通道 B：验证码只能发到本人邮箱（发码时已强制），故这里用当前登录用户的邮箱校验。
+            // 安全边界明示：此通道下「邮箱可达 = 凭据可改」，靠改密后统一销毁会话做止损
+            captchaService.verify(CaptchaScene.CHANGE_PASSWORD, account.email(), request.getCaptcha());
+        }
+
         userService.updatePassword(account.id(), passwordEncoder.encode(request.getNewPassword()));
 
         // 改密后强制重新登录：旧密码可能已泄露，继续沿用已签发的令牌会让改密失去止损意义。
