@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 mvn -o -DskipTests compile        # 快速编译（离线可用，5 个模块）
 mvn -o -DskipTests package        # 打包（仅 qsx-admin 产出可执行 fat jar）
-mvn test                          # 全量测试（171 例；仅 qsx-admin 有测试）
+mvn test                          # 全量测试（204 例；仅 qsx-admin 有测试）
 
 # 指定测试类时**必须**带 -Dsurefire.failIfNoSpecifiedTests=false：
 # 多模块 reactor 会让 -Dtest 同时作用于 5 个模块，其余 4 个模块没有匹配的测试类，
@@ -50,7 +50,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 | `qsx-common` | `Result` / `ResultCode` / `BusinessException` + 审计端口契约 `AccessLogRecorder` | 只依赖 lombok，零业务依赖 |
 | `qsx-security` | Security 装配、令牌过滤器、Redis 双 token 会话 + Lua、权限缓存、`SecurityUser` / `SecurityUtils` | **不得依赖任何业务模块**；向外取数走 `port` 包（`AuthUserRepository` / `UserAuthorityRepository`），由业务模块实现 |
 | `qsx-framework` | MyBatis-Plus 与异步线程池配置、`PageResult`、全局异常处理、操作日志切面 | **不得依赖任何业务模块**；审计落库走 `AccessLogRecorder` 端口 |
-| `qsx-module-system` | 认证 / 用户 / 角色 / 权限 / 菜单 / 日志 / Excel 全部业务 + 端口实现 | 包名与原单模块一致；`mapper/adapter` 下是端口实现（必须 `@Component`） |
+| `qsx-module-system` | 认证 / 验证码（Redis+Lua）/ 用户 / 角色 / 权限 / 菜单 / 日志 / Excel 全部业务 + 端口实现 | 包名与原单模块一致；`mapper/adapter` 下是端口实现（必须 `@Component`）；`service/email` 是邮件投递端口 |
 | `qsx-admin` | 启动类、`application.yml`、集成测试 | 唯一可执行模块；`spring-boot-maven-plugin` 只在此声明 |
 
 **新增业务模块**：建 `qsx-module-<域>`，pom 只依赖 `qsx-framework`，控制器沿用 `com.qsx.web.controller.<域>` 即自动纳入审计，再在 `qsx-admin` 的 pom 加一行依赖——**无需改动任何内核代码**。
@@ -73,6 +73,23 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 - 请求链路：`TokenAuthenticationFilter`（Redis 反查 userId）→ `SecurityUserDetailsService.loadUserById`（实时查库 + 权限缓存）→ `isEnabled()` → 写入 SecurityContext。
 - 吊销入口统一为 `AuthSessionService.remove(userId)`，调用点：登出、踢人、禁用、删除用户、改密。**新增任何涉及账号状态或凭据的用户生命周期变更，必须一并清理会话**，否则旧令牌仍然有效。
 - **fail 策略分级**：会话层 fail-closed（Redis 故障 = 拒绝认证，宁可不放行）；权限缓存 fail-open（Redis 异常降级查库）。两者边界不可混淆。
+
+### 邮箱验证码
+
+`POST /auth/captcha`（匿名放行）+ 两条 Lua（`qsx-module-system/src/main/resources/lua/captcha_*.lua`，**脚本必须与使用方同模块**，否则 `ClassPathResource` 加载失败）。
+
+| Key | 含义 | TTL |
+| :--- | :--- | :--- |
+| `qsx:auth:cap:{scene}:{email}` | 6 位验证码（明文） | 5m |
+| `qsx:auth:cap:attempt:{scene}:{email}` | 错误计数，达到 max-attempts 即作废 | 与码同生共死 |
+| `qsx:auth:cap:limit:{scene}:{email}` | 发送间隔标记（`SET NX`） | 60s |
+| `qsx:auth:cap:daily:{yyyyMMdd}:{scene}:{email}` | 当日发送计数 | 24h（**日期串键**） |
+
+- **发送侧也必须原子**：限流标记 + 当日计数 + 落码 + 清零错次写在同一条 Lua 里。拆成 Java 侧 `INCR` + `EXPIRE` 会有两个静默故障——中途失败留下**无 TTL** 的键，把该 `{scene}:{email}` 永久锁死；每次发送都续期则日限退化成滑动窗口、永不触发。
+- 校验侧 `GET → 比对 → 计数 → 删除` 必须原子，否则同一张码可被并发双花（「用后即焚」失效）。
+- 投递走 `EmailService` 端口（`service/email`）：`SmtpEmailService`（本地 Mailpit 与线上真实邮箱**共用同一份**，差异只在 `spring.mail.*`）与 `DebugEmailService`（`qsx.captcha.debug=true` 时响应直返码）。**两个实现条件装配必须互斥**，都装配会启动即 `NoUniqueBeanDefinitionException`。`@Async("captchaMailExecutor")` 靠外部 Bean 调用触发代理。
+- 场景语义：`REGISTER` 要求邮箱未注册；`FORGOT_PASSWORD` 对未注册邮箱**不落码不投递、但响应与成功完全一致**（防枚举）；`CHANGE_PASSWORD` 要求登录且邮箱为本人（URL 层 permitAll，靠业务层 `SecurityUtils` 判定，未登录返回 body 业务码 401）。
+- **校验顺序统一为「前置条件 → 验证码」**（注册是「唯一性 → 验证码」）：校验成功即用后即焚，先校验会把用户手里那张有效的码烧掉。
 
 ### 授权
 
@@ -100,6 +117,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 - **Lua 读 Hash 字段用 `HGET`，不要用 `HGETALL`**：RESP2 下后者返回的是数组而非 map，字段访问恒为 `nil`——曾导致「即时踢下线」静默失效（`remove` 永远删不掉 AT 键）。
 - **Lua 写入顺序固定为「先清旧 → 写 session → 写令牌键」**：Lua 报错不回滚，这个顺序保证崩溃时留下的是死令牌（安全）而不是无法吊销的裸令牌。
 - **TTL 一律整数秒且下限为 1**：`SET ... EX 0` 报错而 `EXPIRE key 0` 会直接删键。`AuthSessionProperties` 有启动期校验，纯数字配置会被当作毫秒（`30` 是 30 毫秒，不是 30 天）。
+- **限流计数必须原子，且 TTL 只能在首次设置**：`INCR` 与 `EXPIRE` 分开写，中断就会留下没有 TTL 的键（该 key 永久锁死）；每次都 `EXPIRE` 则窗口滑动、上限永不触发。验证码四键的做法见 `captcha_send.lua`（日期串键 + 仅计数为 1 时设 TTL）。
 - **无事务时发布的事件会被静默丢弃**：`@TransactionalEventListener` 默认 `fallbackExecution=false`。给非 `@Transactional` 方法补发失效事件时必须同时加事务，或显式设置 fallback。
 - **测试清理禁用全表删除**：`DELETE FROM sys_user` 会删掉预置超管；`userMapper.delete(null)` 更会因 `@TableLogic` 变成全表逻辑删除。只清测试用户（`email LIKE '%@test.com%'`）与 `test-` 前缀的测试角色/菜单。
 - **物理唯一索引 + 逻辑删除 ⇒ 判重必须含已删行**：`uk_role_code` / `uk_perm_code` 都是**不含 `deleted` 列**的唯一索引，而删除是逻辑删除——用 `BaseMapper.selectOne` 判重会被 `@TableLogic` 自动过滤掉已删行，于是「删除后用同一编码新建」通过校验、在 INSERT 时撞唯一索引返回 **500 而非 1010/1016**。角色与权限走 `countByCodeIncludeDeleted`（显式 SQL 绕开过滤）；用户则用「删除时把 `email` 改写为 `#deleted_<时间戳>`」释放索引。
@@ -108,11 +126,11 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 
 ## 测试
 
-`BaseIntegrationTest` 提供：`register` / `loginGetToken` / `loginGetAuth`（返回 `token`/`refreshToken`/`userId`/`email`）、`postJson` / `bearerHeader` / `uniqueEmail` / `adminToken()`（走真实 `assignRoles` 链路构造超管）。用例前后自动清理测试用户、测试角色（`test-` 前缀，含逻辑删除行）、操作日志表，并清空 Redis 会话与权限缓存键。
+`BaseIntegrationTest` 提供：`register`（**内部走真实发码链路**：调 `/auth/captcha` → 从 Redis 取码 → 带码注册，故各测试类的 `register(...)` 调用点无需关心验证码）/ `loginGetToken` / `loginGetAuth`（返回 `token`/`refreshToken`/`userId`/`email`）、`postJson` / `bearerHeader` / `uniqueEmail` / `adminToken()`（走真实 `assignRoles` 链路构造超管）。用例前后自动清理测试用户、测试角色（`test-` 前缀，含逻辑删除行）、操作日志表，并清空 Redis 会话与权限缓存键。
 
 `SessionLuaTest` 是唯一直连会话层的测试（不经 HTTP），覆盖原子性、并发双花、清理完整性——**改动 Lua 脚本后必须让它全绿**。
 
-**34 个接口 ↔ 测试类的对应关系见 `docs/test/项目测试报告.md` §1.4 覆盖矩阵。** 新增接口须同步补测试：鉴权正反向、业务码矩阵、边界（401/403、越权、不存在）、以及机制层断言（该落库的落库、该清的键要清）。全部测试类：认证会话 `AuthControllerTest` / `AuthRefreshTest` / `AuthSessionTest` / `SecurityAccessTest` / `SessionLuaTest`，用户 `UserControllerTest` / `UserEdgeTest` / `UserKickTest` / `UserImportExportTest`，角色权限 `RoleTest` / `PermissionTest` / `RbacTest` / `RbacCacheTest` / `RbacCacheDisabledTest` / `AdminProtectionTest`，菜单日志 `MenuTest` / `LogTest`，改造回归 `RefactorRegressionTest`，全链路 `BusinessFlowTest`。
+**36 个接口 ↔ 测试类的对应关系见 `docs/test/项目测试报告.md` §1.4 覆盖矩阵（验证码轮次见 §九）。** 新增接口须同步补测试：鉴权正反向、业务码矩阵、边界（401/403、越权、不存在）、以及机制层断言（该落库的落库、该清的键要清）。全部测试类：认证会话 `AuthControllerTest` / `AuthRefreshTest` / `AuthSessionTest` / `SecurityAccessTest` / `SessionLuaTest`，用户 `UserControllerTest` / `UserEdgeTest` / `UserKickTest` / `UserImportExportTest`，角色权限 `RoleTest` / `PermissionTest` / `RbacTest` / `RbacCacheTest` / `RbacCacheDisabledTest` / `AdminProtectionTest`，菜单日志 `MenuTest` / `LogTest`，邮箱验证码 `CaptchaTest` / `ForgotPasswordTest` / `ChangePasswordChannelTest` / `CaptchaMailSmokeTest`（Mailpit 未启动时 `assumeTrue` 跳过），改造回归 `RefactorRegressionTest`，全链路 `BusinessFlowTest`。
 
 ## 文档索引
 
@@ -120,5 +138,5 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 - `docs/design/springboot项目设计.md`：设计规格（架构/模块划分、认证流程、数据表、注意事项）
 - `docs/design/验证码功能实施方案.md`：**当前实施依据**（定稿待批，2026-09-27 逐条核对代码后重写，含 Mailpit + @Async 投递、Lua 原子限流、测试取码方式与阶段验收）
 - `docs/design/验证码功能改造计划方案.md`：旧参考稿（**已被上者取代**，仅历史留存）
-- `docs/test/项目测试报告.md`：**全项目测试总报告**（四轮合并：34 接口覆盖矩阵、171 例自动化基线、171 条真实 HTTP 逐接口明细、累计 16 处产品缺陷与 7 项观察项、环境清理验收）；原始请求/响应见同目录 `项目测试报告.json`
+- `docs/test/项目测试报告.md`：**全项目测试总报告**（五轮合并：36 接口覆盖矩阵、204 例自动化基线、191 条真实 HTTP 逐接口明细、累计 16 处产品缺陷与 7 项观察项、环境清理验收）；验证码轮次见 §九，原始请求/响应见同目录 `项目测试报告.json`
 - `docs/session-notes/qsxmanager/`：`会话总结-qsxmanager全项目.md` 是主线总览（含设计约束与有意取舍）；早期阶段增量总结已合并归档删除，早期测试细节已并入 `docs/test/项目测试报告.md`

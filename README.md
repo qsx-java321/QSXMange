@@ -2,7 +2,7 @@
 
 > 单体**多模块**（5 个 Maven 模块）、前后端分离的**用户后台管理基础 demo** —— 为其他项目提供可直接复用的认证、授权、用户与会话基座。
 
-本项目覆盖「认证中心（邮箱+密码+**Redis 有状态双 token 会话**）」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」「操作日志（AOP 访问审计）」「用户 Excel 批量导入导出」与「RBAC 权限缓存（Redis）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。用户登出、管理员强制登出（踢下线）、账号禁用/解冻、删除用户与修改密码均已在会话层打通，**旧 access token 一律立即失效**。
+本项目覆盖「认证中心（邮箱+密码+**Redis 有状态双 token 会话**）」「**邮箱验证码（注册 / 忘记密码 / 改密通道 B）**」「RBAC 权限管理（角色/权限）」「菜单管理（动态路由菜单树）」「操作日志（AOP 访问审计）」「用户 Excel 批量导入导出」与「RBAC 权限缓存（Redis）」，形成 认证 → 授权 → 业务 → 前端路由 的完整闭环。用户登出、管理员强制登出（踢下线）、账号禁用/解冻、删除用户与修改密码均已在会话层打通，**旧 access token 一律立即失效**。
 
 ---
 
@@ -18,6 +18,8 @@
 | 权限缓存 | Redis 7.4.x（`spring-boot-starter-data-redis`，用户权限码缓存，未命中回源 MySQL 并回填） |
 | 切面 | Spring AOP（`spring-boot-starter-aop`）操作日志切面 + `@Async` 异步落库 |
 | Excel | EasyExcel 4.0.3（SAX 流式读写，导入解析上传流 / 导出直出响应流，不落盘） |
+| 邮件 | Spring Mail（`spring-boot-starter-mail`）+ **Mailpit** 本地假 SMTP（1025 收信 / 8025 取码） |
+| 验证码 | Redis 四键 + 两条 Lua 原子脚本（6 位数字 · 5 分钟 · 错 5 次作废 · 用后即焚 · 60s 间隔 · 每日 10 次） |
 | 数据库 | MySQL 8.x |
 | 密码加密 | BCrypt |
 | 接口风格 | RESTful，统一 `Result` / `PageResult` 返回 |
@@ -61,11 +63,13 @@ QSXManager/                              # 父工程（packaging=pom，继承 sp
 ├── qsx-framework/                       # ③ 技术底座
 │   └── com/qsx/framework/{config, result, web, aspect}
 ├── qsx-module-system/                   # ④ 系统管理业务模块（纵切，包名与原单模块一致）
-│   └── com/qsx/{mapper, domain, service, web, common/constant}
+│   ├── com/qsx/{mapper, domain, service, web, common/constant}
+│   │   └── service/{captcha, email}     #    验证码内核与邮件投递端口（EmailService）
+│   └── resources/lua/                   #    验证码发送/校验原子脚本
 ├── qsx-admin/                           # ⑤ 启动器（唯一可执行产物）
 │   ├── src/main/java/com/qsx/QsxProjectApplication.java
 │   ├── src/main/resources/application.yml
-│   └── src/test/java/com/qsx/           #    自动化集成测试（171 例，覆盖 34 个接口）
+│   └── src/test/java/com/qsx/           #    自动化集成测试（204 例，覆盖 36 个接口）
 ├── sql/init.sql                         # 建表脚本（sys_user + RBAC 四表 + 菜单/权限 + 预置数据）
 └── docs/
 ```
@@ -120,12 +124,14 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 
 | 功能 | 接口 | 说明 |
 |------|------|------|
-| 注册 | `POST /auth/register` | 邮箱+密码注册，默认启用 |
+| 发送验证码 | `POST /auth/captcha` | 匿名放行；body `{scene, email}`，`scene ∈ REGISTER / FORGOT_PASSWORD / CHANGE_PASSWORD`。6 位数字 · 5 分钟 · 错 5 次作废 · 用后即焚；同场景同邮箱 60 秒 1 次、每日 10 次；**`CHANGE_PASSWORD` 需登录且只能发本人邮箱**。邮件投递到本地 Mailpit（`http://127.0.0.1:8025` 取码） |
+| 注册 | `POST /auth/register` | 邮箱 + 密码 + **邮箱验证码**，默认启用；校验顺序为「唯一性 → 验证码」，已注册邮箱的重试不会烧掉用户手里那张有效的码 |
 | 登录 | `POST /auth/login` | 校验通过返回 access token + refresh token 与用户信息（含角色码、权限码）；**单端登录**，同用户旧会话立即失效 |
 | 刷新令牌 | `POST /auth/refresh` | body 只传 `{refreshToken}`（身份由服务端反查）；换取新令牌对，**旧 refresh 与其对应的旧 access 均立即失效**（严格轮换，前端须保证刷新单飞）；滑动续期、30 天绝对上限 |
 | 登出 | `POST /auth/logout` | 清理会话三键，**当前 access token 立即失效** |
 | 当前用户 | `GET /auth/me` | 返回当前登录用户信息 |
-| 修改密码 | `POST /auth/change-password` | 需校验原密码；**改密成功后当前会话被清理，前端应引导重新登录** |
+| 修改密码 | `POST /auth/change-password` | **双通道二选一**：A 原密码（`oldPassword`）/ B 邮箱验证码（`captcha`）；两者都传或都不传返回 1031；**成功后当前会话被清理，前端应引导重新登录**。通道 B 的安全边界：邮箱可达 = 凭据可改 |
+| 忘记密码 | `POST /auth/forgot-password` | 匿名：邮箱 + 验证码 + 新密码 ×2；**成功后该用户全部会话被销毁且不自动登录**；邮箱未注册与验证码错误返回**完全一致**的响应（防枚举） |
 
 ### 用户管理（需登录 + 权限）
 
@@ -187,7 +193,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 | 清空日志 | `DELETE /api/logs` | `log:delete` | 物理清空全部 |
 
 ### 鉴权说明
-- `/auth/register`、`/auth/login`、`/auth/refresh` 匿名放行；
+- `/auth/register`、`/auth/login`、`/auth/refresh`、`/auth/captcha`、`/auth/forgot-password` 匿名放行（后两者中需要登录态的场景由业务层判定，未登录返回 body 业务码 401）；
 - 其余接口需携带请求头 `Authorization: Bearer <access token>`；
 - 每个请求由认证过滤器执行一次 Redis 查身份 + 一次实时查库（禁用/删除即时生效），因此 access token 一旦从 Redis 消失即失效；
 - access token 有效期 30 分钟，过期后前端应调用 `/auth/refresh` 静默换新。**前端契约**：① 刷新必须**单飞**（并发刷新时只有一个成功，其余返回 1019）；② 刷新成功后旧 access token 立即失效，在途请求会 401，应重试而不是直接登出；③ **除「未携带 refreshToken」返回 400 外，一切刷新失败（含令牌形态非法、未知、已轮换、超 30 天、Redis 故障）统一返回 1019**，此时应清登录态引导重新登录；
@@ -234,6 +240,12 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 | 1024 | 角色编码创建后不可修改 |
 | 1025 | 内置超管用户不可删除 |
 | 1026 | 内置超管角色不可停用 |
+| 1027 | 验证码发送过于频繁，请稍后再试（60 秒间隔未到或当日超限） |
+| 1028 | 验证码无效或已过期（不存在/过期/填错**统一文案**，避免被用来探测验证码状态） |
+| 1029 | 验证码错误次数超限，请重新获取 |
+| 1030 | 两次输入的密码不一致 |
+| 1031 | 修改密码需提供原密码或验证码之一 |
+| 1032 | 该场景验证码仅限本人邮箱 |
 
 ## 六、快速开始
 
@@ -244,7 +256,8 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 | JDK | 21 | |
 | Maven | 3.9+ | |
 | MySQL | 8.x Docker 容器，`localhost:3306`，`root/123456`，数据卷持久化 | 建表脚本见 `sql/init.sql` |
-| Redis | 7.4.x Docker 容器，`localhost:6379`（无密码） | 会话存储（认证链路**硬依赖**，故障即全员 401）+ RBAC 权限缓存（异常自动降级为实时查库） |
+| Redis | 7.4.x Docker 容器，`localhost:6379`（无密码） | 会话存储（认证链路**硬依赖**，故障即全员 401）+ RBAC 权限缓存（异常自动降级为实时查库）+ 验证码四键 |
+| Mailpit | `axllent/mailpit:v1.31` Docker 容器：SMTP `localhost:1025` / Web UI `localhost:8025` | 验证码邮件收信与取码（**本地假 SMTP，不外发**）。容器未启动时发码接口仍返回成功（投递是异步的），但收不到邮件；也可用 `qsx.captcha.debug=true` 改为响应直返验证码 |
 
 > Docker 组件启动命令见 `docs/dev-env/组件依赖README.md`。
 
@@ -292,7 +305,7 @@ curl -X POST http://localhost:8080/auth/login \
 ### 5. 运行自动化测试（可选）
 
 ```bash
-mvn test                              # 全量（仅 qsx-admin 有测试，共 171 例）
+mvn test                              # 全量（仅 qsx-admin 有测试，共 204 例）
 # 只跑部分测试类时必须带 -Dsurefire.failIfNoSpecifiedTests=false：
 # 多模块 reactor 的其余模块没有匹配的测试类，surefire 默认会因此报错
 mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false        # 单个测试类
@@ -303,11 +316,11 @@ mvn test -Dtest='RbacTest,MenuTest' -Dsurefire.failIfNoSpecifiedTests=false   # 
 
 测试只清理自己创建的数据——`*@test.com` 测试用户、`test-` 前缀的测试角色/菜单（含逻辑删除行）、两侧关联与操作日志表；预置超管、`ADMIN` 角色与 29 条种子权限不会被删除。**不要在本地应用正服务会话时跑测试**（会清掉在线会话的 Redis 键）。
 
-逐接口的测试结果见 [docs/test/项目测试报告.md](docs/test/项目测试报告.md)（覆盖矩阵 + 171 条真实 HTTP 明细；原始请求/响应见同目录 `项目测试报告.json`）。
+逐接口的测试结果见 [docs/test/项目测试报告.md](docs/test/项目测试报告.md)（36 接口覆盖矩阵 + 191 条真实 HTTP 明细；原始请求/响应见同目录 `项目测试报告.json`）。
 
 ## 七、作为二开基座
 
-本项目定位是**可直接复用的用户后台管理基础 demo**：认证、授权、用户、会话、角色、权限、菜单、日志八条主线已完成闭环并有 171 例自动化测试锁定，新业务模块可直接叠加在其上。
+本项目定位是**可直接复用的用户后台管理基础 demo**：认证、授权、用户、会话、角色、权限、菜单、日志、**邮箱验证码**九条主线已完成闭环并有 204 例自动化测试锁定，新业务模块可直接叠加在其上。
 
 | 扩展方向 | 起点 |
 |------|------|
@@ -317,6 +330,8 @@ mvn test -Dtest='RbacTest,MenuTest' -Dsurefire.failIfNoSpecifiedTests=false   # 
 | 扩展用户生命周期 | 任何涉及账号状态或凭据的变更，**必须一并调用 `AuthSessionService.remove(userId)`** 回收会话，否则旧令牌仍然有效 |
 | 接入审计 | `OperationLogAspect`（`qsx-framework`）对 `com.qsx.web.controller` 包级扫描，新增控制器自动纳入；落库经 `AccessLogRecorder` 端口异步完成 |
 | 调整会话语义 | 多键操作必须走 Lua（`qsx-security/src/main/resources/lua/auth_session_*.lua`），**改脚本前先读脚本头部注释** |
+| 接入邮件/通知 | 业务只注入 `EmailService` 端口：本地 Mailpit 与线上真实 SMTP 共用 `SmtpEmailService`（**切换只改 `spring.mail.*`**），只提供 HTTP API 的服务商再加一个实现即可 |
+| 调整验证码策略 | `qsx.captcha.*`（`ttl` / `max-attempts` / `send-interval` / `daily-limit` / `debug` / `from-address`）；键与脚本见 `qsx-module-system/src/main/resources/lua/captcha_*.lua` |
 | 单独复用认证内核 | 只引入 `qsx-common` + `qsx-security` 时，必须自行提供 `AuthUserRepository`、`UserAuthorityRepository`、`AccessLogRecorder` 三个 Bean，否则启动即 `NoSuchBeanDefinitionException` |
 
 ---
@@ -327,7 +342,8 @@ mvn test -Dtest='RbacTest,MenuTest' -Dsurefire.failIfNoSpecifiedTests=false   # 
 |------|------|
 | [docs/design/springboot项目设计.md](docs/design/springboot项目设计.md) | 设计规格（架构/模块划分、认证流程、数据表、注意事项） |
 | [docs/design/验证码功能改造计划方案.md](docs/design/验证码功能改造计划方案.md) | 邮箱验证码能力引入计划（**规划中未实行**，含 Mailpit + @Async 异步投递通道设计） |
-| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 全项目测试总报告（34 接口覆盖矩阵、171 例自动化基线、171 条真实 HTTP 明细）；原始请求/响应见同目录 `项目测试报告.json` |
+| [docs/design/验证码功能实施方案.md](docs/design/验证码功能实施方案.md) | 邮箱验证码**实施方案**（已按 P0~P4 实施完成；含决策基线、Lua 设计、测试取码方式与验收标准） |
+| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 全项目测试总报告（36 接口覆盖矩阵、204 例自动化基线、191 条真实 HTTP 明细）；原始请求/响应见同目录 `项目测试报告.json` |
 | [docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md](docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md) | 全项目主线总览（阶段脉络、跨阶段决策、设计约束与有意取舍） |
 | [docs/dev-env/组件依赖README.md](docs/dev-env/组件依赖README.md) | Docker 中间件清单（MySQL/Redis/RabbitMQ/Kafka/SeaweedFS/Mailpit）部署与启停 |
 

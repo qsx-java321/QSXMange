@@ -1,15 +1,15 @@
 # QSXManager 全项目主线 - 总总结
 
-> 类型：全项目总总结（稳定文件名，随里程碑更新）｜ 最近更新：2026-09-23
+> 类型：全项目总总结（稳定文件名，随里程碑更新）｜ 最近更新：2026-09-27
 > **读者导航**：想快速了解项目全貌、当前状态、跨阶段决策与共性坑 → 读本文件；想查某阶段的实施细节 / 测试报告 → 读下方「阶段导航」指向的对应增量文件（增量保留作历史快照，不删除）。
 
-## 〇、项目现状快照（截至 2026-09-23）
+## 〇、项目现状快照（截至 2026-09-27）
 
 - **定位**：**用户后台管理基础 demo**——单体多模块（5 模块，qsx-admin → module-system → framework → security → common）、前后端分离，为其他项目提供可直接复用的认证/授权/用户/会话基座（Spring Boot 3.5.16 / Java 21 / MyBatis-Plus / MySQL 8.4 / Redis / **无 JWT，令牌为随机串**），根包 `com.qsx`，分支 `master`
-- **已完成七大模块**：认证中心（双令牌会话）→ RBAC 权限（权限码 + 菜单树复用一表）→ 操作日志（AOP 审计）→ Excel 批量导入导出 → 权限缓存（Redis）→ 会话管理（登出 / 强制登出 / 禁用解冻保护）→ **双 token 有状态会话（Redis 唯一真相源，吊销即时生效）**；**规划中**：邮箱验证码（注册 / 忘记密码 / 改密通道 B）
+- **已完成七大模块**：认证中心（双令牌会话）→ RBAC 权限（权限码 + 菜单树复用一表）→ 操作日志（AOP 审计）→ Excel 批量导入导出 → 权限缓存（Redis）→ 会话管理（登出 / 强制登出 / 禁用解冻保护）→ **双 token 有状态会话（Redis 唯一真相源，吊销即时生效）** → **邮箱验证码（注册 / 忘记密码 / 改密通道 B，本地经 Mailpit 投递）**
 - **环境中间件**（Docker，2026-09-23 核验）：mysql / redis / rabbitmq / kafka / seaweedfs / **mailpit（v1.31，本地假 SMTP，SMTP 1025 + Web UI 8025，卷 mailpit-data，unless-stopped 自启）**；组件清单见 `docs/dev-env/组件依赖README.md`
 - **工程记忆红线**（项目 memory / wrap 技能固化，本文件不重复抄写）：权限表只读、ADMIN 禁删、整表替换授权、逻辑删除释放邮箱、AFTER_COMMIT 失效缓存、fail-open 权限缓存 / fail-closed 会话、测试双轨制
-- **最新提交**：`c7245c1`（验证码功能计划会话总结）、`74604e4`（验证码功能改造计划方案，参考性未实行）、`814992d`（权限缓存失效断链修复）、`40bcfc0`~`b03d1ec`（双 token 会话改造 M1~M5）、`502e26c`（审查 P0/P1 修复）、`2eaae88`（P2 修复）、`84ce032`（delete 保护补齐 + 用户/会话双轨测试收尾）；自动化用例 **171/171** 全绿（见 `docs/test/项目测试报告.md`）
+- **最新提交**：`6e8bb60`（验证码 P3 改密双通道）、`27b178e`（P2 忘记密码）、`08e0b22`（P1 注册接入）、`21660ba`（P0 验证码内核）、`2936d8b`（方案定稿 + 测试命令修复）、`c13fcbb`（方案升级 Mailpit）、`814992d`（权限缓存失效断链修复）、`40bcfc0`~`b03d1ec`（双 token 会话改造 M1~M5）；自动化用例 **204/204** 全绿（见 `docs/test/项目测试报告.md`）
 
 ## 一、发展阶段脉络（时间线主线）
 
@@ -71,14 +71,26 @@ EasyExcel 流式（文件不落盘）、整批校验整体拒绝、模板含角�
 Docker 部署本地假 SMTP `axllent/mailpit:v1.31`（SMTP 1025 / Web UI 8025，卷 mailpit-data，unless-stopped 自启，支持手动 `docker stop/start`），用于拦截验证码邮件、本地取码；组件文档 `docs/dev-env/组件依赖README.md` 补 Mailpit 全套（部署命令/参数表/Spring Mail 对接/数据卷/console 链接）。验证码方案发送通道从「debug 直返」升级为「**MailCaptchaSender（JavaMailSender + `@Async` 异步投 Mailpit localhost:1025）为主，debug 直返降级为 `qsx.captcha.debug` 条件装配兜底**」，新增独立线程池 `captchaMailExecutor`（2~4 线程）、生产红线段（`spring.mail.host` 不得指向 localhost:1025、debug 启动即拒）、端到端验收（Mailpit 8025 实际收到邮件）。仍未实现任何代码；2 个文档改动未提交。
 → 细节见 `docs/design/验证码功能改造计划方案.md` §3.3/§3.6 + `docs/dev-env/组件依赖README.md`（规划期会话总结已删除，内容并入本文件）
 
+### 阶段 15 · 邮箱验证码功能实施（09-27）：注册 / 忘记密码 / 改密通道 B
+按 `docs/design/验证码功能实施方案.md`（定稿，逐条核对代码后重写）分四阶段落地，每阶段一次提交、全量转绿：
+
+- **P0 验证码内核**（`21660ba`）：Redis 四键（code / attempt / limit / daily）+ 两条 Lua 原子脚本（发送侧限流与落码、校验侧用后即焚）；`EmailService` 端口 + `SmtpEmailService`（本地 Mailpit 与线上真实邮箱**共用**，切换只改 `spring.mail.*`）/ `DebugEmailService`（`qsx.captcha.debug=true` 时响应直返），条件装配互斥；独立线程池 `captchaMailExecutor`；`POST /auth/captcha`；错误码 1027~1032。顺带把「请求体无法绑定」从兜底 500 修成 400。
+- **P1 注册接入**（`08e0b22`）：注册需邮箱验证码，顺序定为「唯一性 → 验证码」（校验成功即用后即焚，先校验会把用户手里那张有效的码烧掉）；测试 helper 改为真实发码链路，8 个测试类的调用点零改动。
+- **P2 忘记密码**（`27b178e`）：`POST /auth/forgot-password` 匿名通道，重置成功即销毁该用户**全部会话**；未注册邮箱与错码返回完全一致（防枚举）。
+- **P3 改密双通道**（`6e8bb60`）：原密码 / 验证码二选一（都传或都不传 1031）；顺带把改密的密码强度补到与注册一致（此前只校验长度，比注册还松）。
+- **P4 回归与文档**：全量 **204 例全绿**；真实 HTTP 双轨验收 20 笔（含 Mailpit 实收邮件正文、旧令牌 401 与 Redis 三键消失的机制层断言、防枚举响应逐字段一致）；README / CLAUDE.md / 设计文档 / 测试报告四件套同步。
+
+规划期两处硬缺陷在此被修正（邮件依赖应加在 `qsx-module-system` 而非 `qsx-admin`、两个投递实现的条件装配必须互斥），并顺带修掉一条文档缺陷：多模块下 `mvn test -Dtest=X` 必然 BUILD FAILURE。
+→ 细节见 `docs/design/验证码功能实施方案.md` §0（差异清单）与 `docs/test/项目测试报告.md` §九（R5 轮次）
+
 ## 二、跨阶段关键决策与演进（横切视角）
 
 - **数据模型演进**：`sys_user` 单表 → RBAC 5 表（关系表物理删除）→ `sys_permission` 一表两用（菜单+按钮权限）→ 日志表不可变
 - **认证演进**：单 JWT 24h 无状态 → 权限每请求查库 → 权限 Redis 缓存（fail-open 降级）→ 双令牌会话（会话层 fail-closed）→ **有状态随机串双 token（Redis 唯一真相源，AT 可即时吊销）**
-- **验证码发送通道演进（规划期）**：debug 直返（09-22 定稿，因无邮件设施）→ **Mailpit 本地 SMTP + `@Async` 异步投递为主（09-23，mailpit 就位后回查升级）**，debug 直返降级为条件装配兜底；端口抽象 `CaptchaSender` 保证未来切真实邮件服务零业务改动
+- **验证码发送通道演进（已落地）**：debug 直返（09-22 规划）→ Mailpit + `@Async` 异步投递为主（09-23 规划升级）→ **09-27 实施：`EmailService` 端口 + `SmtpEmailService`（Mailpit 与真实邮箱共用一份，差异只在 `spring.mail.*`）+ `DebugEmailService`（条件装配兜底）**；将来接只提供 HTTP API 的服务商时再加一个实现
 - **鉴权模式（贯穿）**：权限码 + `@PreAuthorize`，ADMIN 绑定全量权限——新增权限须同步 init.sql 预置（INSERT IGNORE + 自动绑 ADMIN）
 - **「变更即时生效」原则**：权限靠每请求加载 + AFTER_COMMIT 失效；禁用靠每请求查库 status；因此权限变更不需要踢人
-- **测试体系演进**：35 → 40 → 48 → 63 → 66 → 85 → 88 → 109 → 115 → 130 → **138** 用例；MockMvc + 真实 MySQL/Redis 集成测试 + 真实 HTTP 双轨制；`adminToken()` 走真实 assignRoles 链路；会话层 Lua 有专项直连测试（含并发双花）
+- **测试体系演进**：35 → 40 → 48 → 63 → 66 → 85 → 88 → 109 → 115 → 130 → 138 → 171 → **204** 用例；MockMvc + 真实 MySQL/Redis 集成测试 + 真实 HTTP 双轨制；`adminToken()` 走真实 assignRoles 链路；会话层 Lua 有专项直连测试（含并发双花）
 
 ## 三、跨阶段共性教训（高频坑沉淀）
 

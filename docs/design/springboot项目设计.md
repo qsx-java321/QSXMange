@@ -138,7 +138,7 @@
 
     - 名称: qsx-module-system
 
-      职责: 认证 / 用户 / 角色 / 权限 / 菜单 / 日志 / Excel 全部业务 + 端口实现；控制器沿用 com.qsx.web.controller.<域> 自动纳入审计
+      职责: 认证 / 邮箱验证码 / 用户 / 角色 / 权限 / 菜单 / 日志 / Excel 全部业务 + 端口实现；控制器沿用 com.qsx.web.controller.<域> 自动纳入审计
 
       子包:
 
@@ -152,7 +152,15 @@
 
         - 路径: service
 
-          职责: AuthService、UserService、RoleService、PermissionService、PermissionCacheService、OperationLogService、UserImportExportService（+ impl 子包）
+          职责: AuthService、CaptchaService、UserService、RoleService、PermissionService、PermissionCacheService、OperationLogService、UserImportExportService（+ impl 子包）
+
+        - 路径: service.captcha
+
+          职责: CaptchaRedisKeys（验证码四键构造与前缀常量）
+
+        - 路径: service.email
+
+          职责: EmailService 投递端口 + SmtpEmailService（本地 Mailpit 与线上真实邮箱共用）/ DebugEmailService（响应直返），条件装配互斥
 
         - 路径: mapper
 
@@ -173,6 +181,10 @@
     - 路径: qsx-security/resources/lua
 
       职责: 会话 Lua 脚本（auth_session_find / issue / remove）
+
+    - 路径: qsx-module-system/resources/lua
+
+      职责: 验证码 Lua 脚本（captcha_send / captcha_verify）——脚本必须与使用方同模块
 
     - 路径: qsx-admin/resources/application.yml
 
@@ -418,9 +430,13 @@ RBAC模型:
 
   注册:
 
-    - 用户提交邮箱、密码
+    - 先调 POST /auth/captcha（scene=REGISTER）获取邮箱验证码
+
+    - 提交邮箱、密码、验证码
 
     - 校验邮箱是否已注册
+
+    - 校验验证码（刻意排在唯一性之后：校验成功即用后即焚，先校验会把用户手里那张有效的码烧掉）
 
     - BCrypt 加密密码
 
@@ -476,9 +492,29 @@ RBAC模型:
 
     - 删除用户时联动清理会话三键
 
-  修改密码:
+  修改密码（双通道二选一）:
 
-    - 校验原密码后更新密码；成功后清理会话三键强制重新登录（客户端契约：改密返回成功后当前令牌即失效）
+    - 通道 A 校验原密码；通道 B 校验 CHANGE_PASSWORD 场景验证码（码只能发到本人邮箱）
+
+    - 两者都传或都不传返回 1031；更新密码后清理会话三键强制重新登录（客户端契约：改密返回成功后当前令牌即失效）
+
+  忘记密码（匿名重置）:
+
+    - 提交邮箱、验证码、新密码 ×2；校验两次密码一致（否则 1030）与验证码有效
+
+    - 更新密码并清理该用户**全部会话**（止损），不自动登录
+
+    - 邮箱未注册与验证码错误返回**完全一致**的响应（防枚举）
+
+  邮箱验证码:
+
+    - POST /auth/captcha 发送：6 位数字 · 5 分钟有效 · 错 5 次作废 · 用后即焚 · 同场景同邮箱 60 秒 1 次 · 每日 10 次
+
+    - Redis 四键（code / attempt / limit / daily）+ 两条 Lua 原子脚本（发送侧与校验侧都必须原子）
+
+    - 投递走 EmailService 端口：SmtpEmailService 经本地 Mailpit 假 SMTP（取码看 http://127.0.0.1:8025），DebugEmailService 在 qsx.captcha.debug=true 时把码放进响应
+
+    - 场景前置条件：REGISTER 要求邮箱未注册；FORGOT_PASSWORD 对未注册邮箱静默跳过；CHANGE_PASSWORD 要求登录且邮箱为本人
 
   异常:
 
@@ -571,6 +607,10 @@ RBAC模型:
   - 角色/权限标识 code 创建后不可修改（鉴权依据）；内置 ADMIN 角色禁止删除/停用/改名
 
   - 会话层 fail-closed、权限缓存 fail-open，两者边界不可混淆
+
+  - 验证码发送侧限流必须原子（日期串键 + 仅在计数为 1 时设 TTL），否则会留下无 TTL 的键永久锁死某邮箱，或让日限退化成滑动窗口、永不触发
+
+  - 验证码校验成功即用后即焚，因此业务侧顺序必须是「前置条件 → 验证码」，否则会烧掉用户手里那张有效的码
 
 
 

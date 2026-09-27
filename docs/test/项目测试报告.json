@@ -24,7 +24,7 @@
     "interfaceTotal": 34
   },
   "trackA": {
-    "finalTotal": 171,
+    "finalTotal": 204,
     "failures": 0,
     "errors": 0,
     "evolution": [
@@ -57,89 +57,116 @@
         "date": "2026-09-18",
         "total": 171,
         "delta": "+27（RoleTest 16 / PermissionTest 5 / Menu+4 / Log+2）"
+      },
+      {
+        "round": "邮箱验证码 P0~P4",
+        "date": "2026-09-27",
+        "total": 204,
+        "delta": "+33（CaptchaTest 18 / ForgotPasswordTest 6 / ChangePasswordChannelTest 6 / CaptchaMailSmokeTest 1 / AuthControllerTest +2）"
       }
     ],
     "classes": [
       {
-        "name": "SessionLuaTest",
-        "count": 13
+        "name": "CaptchaTest",
+        "count": 18
       },
       {
-        "name": "AuthRefreshTest",
-        "count": 11
-      },
-      {
-        "name": "AuthSessionTest",
-        "count": 6
-      },
-      {
-        "name": "AuthControllerTest",
-        "count": 12
-      },
-      {
-        "name": "SecurityAccessTest",
-        "count": 6
+        "name": "RoleTest",
+        "count": 16
       },
       {
         "name": "UserControllerTest",
         "count": 16
       },
       {
-        "name": "UserKickTest",
-        "count": 11
-      },
-      {
         "name": "UserEdgeTest",
         "count": 15
       },
       {
-        "name": "AdminProtectionTest",
-        "count": 8
+        "name": "AuthControllerTest",
+        "count": 14
       },
       {
-        "name": "UserImportExportTest",
-        "count": 9
-      },
-      {
-        "name": "RbacTest",
-        "count": 7
-      },
-      {
-        "name": "RbacCacheTest + RbacCacheDisabledTest",
-        "count": 7
-      },
-      {
-        "name": "RoleTest（本轮新增）",
-        "count": 16
-      },
-      {
-        "name": "PermissionTest（本轮新增）",
-        "count": 5
+        "name": "SessionLuaTest",
+        "count": 13
       },
       {
         "name": "MenuTest",
         "count": 12
       },
       {
+        "name": "AuthRefreshTest",
+        "count": 11
+      },
+      {
+        "name": "UserKickTest",
+        "count": 11
+      },
+      {
+        "name": "UserImportExportTest",
+        "count": 9
+      },
+      {
+        "name": "AdminProtectionTest",
+        "count": 8
+      },
+      {
         "name": "LogTest",
         "count": 8
+      },
+      {
+        "name": "RbacTest",
+        "count": 7
+      },
+      {
+        "name": "AuthSessionTest",
+        "count": 6
+      },
+      {
+        "name": "ChangePasswordChannelTest",
+        "count": 6
+      },
+      {
+        "name": "ForgotPasswordTest",
+        "count": 6
+      },
+      {
+        "name": "RbacCacheTest",
+        "count": 6
       },
       {
         "name": "RefactorRegressionTest",
         "count": 6
       },
       {
+        "name": "SecurityAccessTest",
+        "count": 6
+      },
+      {
+        "name": "PermissionTest",
+        "count": 5
+      },
+      {
         "name": "BusinessFlowTest",
         "count": 3
+      },
+      {
+        "name": "CaptchaMailSmokeTest",
+        "count": 1
+      },
+      {
+        "name": "RbacCacheDisabledTest",
+        "count": 1
       }
     ]
   },
   "trackB": {
     "currentRounds": [
       "R3-20260918",
-      "R4-20260918"
+      "R4-20260918",
+      "R5-20260927"
     ],
-    "currentDetailCount": 171,
+    "currentDetailCount": 191,
     "rounds": [
       {
         "roundId": "R1-20260912",
@@ -3754,6 +3781,355 @@
             "pass": true,
             "ms": 13,
             "note": null
+          }
+        ]
+      },
+      {
+        "roundId": "R5-20260927",
+        "generatedAt": "2026-09-27 22:10:00",
+        "codeVersion": "6e8bb60",
+        "env": "fat jar qsx-admin-1.0.0.jar @ http://localhost:8080；MySQL 8.4 + Redis 7.4.9 + Mailpit v1.31.2（Docker）",
+        "note": "邮箱验证码轮次（P0~P4）。自动化 204 例全绿；本表为真实 HTTP 逐笔记录，机制层断言写在各行 note 中。",
+        "steps": [
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-1",
+            "group": "九 R5 验证码：发码（POST /auth/captcha）",
+            "desc": "REGISTER 场景发码成功（真实 HTTP + fat jar）",
+            "method": "POST",
+            "url": "/auth/captcha",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"scene\":\"REGISTER\",\"email\":\"p0-accept-1790516596@test.com\"}",
+            "httpStatus": 200,
+            "code": 200,
+            "response": "{\"code\":200,\"message\":\"操作成功\",\"data\":null}",
+            "expect": "code=200 且 data 为空",
+            "pass": true,
+            "ms": null,
+            "note": "机制层：Redis qsx:auth:cap:REGISTER:{email}=715746（6 位数字）；码键 TTL=300s；限流键 TTL=60s；daily 计数=1"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-2",
+            "group": "九 R5 验证码：发码（POST /auth/captcha）",
+            "desc": "60 秒内重复发码被限流",
+            "method": "POST",
+            "url": "/auth/captcha",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"scene\":\"REGISTER\",\"email\":\"p0-accept-1790516596@test.com\"}",
+            "httpStatus": 200,
+            "code": 1027,
+            "response": "{\"code\":1027,\"message\":\"验证码发送过于频繁，请稍后再试\",\"data\":null}",
+            "expect": "code=1027",
+            "pass": true,
+            "ms": null,
+            "note": "机制层：旧码未被覆盖（值仍为 715746），daily 计数仍为 1 —— 被限流时不得落码、不得计数"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-3",
+            "group": "九 R5 验证码：发码（POST /auth/captcha）",
+            "desc": "CHANGE_PASSWORD 场景匿名调用（URL 层 permitAll，业务层判定）",
+            "method": "POST",
+            "url": "/auth/captcha",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"scene\":\"CHANGE_PASSWORD\",\"email\":\"p0-accept-1790516596@test.com\"}",
+            "httpStatus": 200,
+            "code": 401,
+            "response": "{\"code\":401,\"message\":\"未登录或登录已过期\",\"data\":null}",
+            "expect": "code=401（HTTP 200）",
+            "pass": true,
+            "ms": null,
+            "note": "permitAll 只跳过授权，认证过滤器照常执行；未登录由 SecurityUtils 判定"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-4",
+            "group": "九 R5 验证码：发码（POST /auth/captcha）",
+            "desc": "scene 取值非法",
+            "method": "POST",
+            "url": "/auth/captcha",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"scene\":\"NOPE\",\"email\":\"p0-accept-1790516596@test.com\"}",
+            "httpStatus": 200,
+            "code": 400,
+            "response": "{\"code\":400,\"message\":\"请求参数错误\",\"data\":null}",
+            "expect": "code=400",
+            "pass": true,
+            "ms": null,
+            "note": "由 HttpMessageNotReadableException 处理器返回（改造前会落到兜底 500）"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-5",
+            "group": "九 R5 验证码：发码（POST /auth/captcha）",
+            "desc": "FORGOT_PASSWORD 场景未注册邮箱：不落码但响应与成功一致",
+            "method": "POST",
+            "url": "/auth/captcha",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"scene\":\"FORGOT_PASSWORD\",\"email\":\"nobody-p4-accept-1790517873@test.com\"}",
+            "httpStatus": 200,
+            "code": 200,
+            "response": "{\"code\":200,\"message\":\"操作成功\",\"data\":null}",
+            "expect": "code=200 且 data 为空",
+            "pass": true,
+            "ms": null,
+            "note": "机制层：Redis 无码键（不投递、不落码），对外不可区分 —— 防枚举"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-6",
+            "group": "九 R5 验证码：发码（POST /auth/captcha）",
+            "desc": "CHANGE_PASSWORD 场景本人邮箱发码（带登录态）",
+            "method": "POST",
+            "url": "/auth/captcha",
+            "auth": "Bearer <AT>",
+            "requestBody": "{\"scene\":\"CHANGE_PASSWORD\",\"email\":\"p4-accept-1790517873@test.com\"}",
+            "httpStatus": 200,
+            "code": 200,
+            "response": "{\"code\":200,\"message\":\"操作成功\",\"data\":null}",
+            "expect": "code=200",
+            "pass": true,
+            "ms": null,
+            "note": "机制层：qsx:auth:cap:CHANGE_PASSWORD:{email}=934509（后续 R5-16 用此码改密成功）"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-7",
+            "group": "九 R5 验证码：注册接入",
+            "desc": "注册缺验证码",
+            "method": "POST",
+            "url": "/auth/register",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"email\":\"p1-accept-1790517444@test.com\",\"password\":\"abc123\"}",
+            "httpStatus": 200,
+            "code": 400,
+            "response": "{\"code\":400,\"message\":\"验证码不能为空\",\"data\":null}",
+            "expect": "code=400",
+            "pass": true,
+            "ms": null,
+            "note": "Bean Validation 拦下（captcha @NotBlank）"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-8",
+            "group": "九 R5 验证码：注册接入",
+            "desc": "验证码错误：拒绝且不消耗用户手里那张码",
+            "method": "POST",
+            "url": "/auth/register",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"email\":\"p1-accept-1790517444@test.com\",\"password\":\"abc123\",\"captcha\":\"000001\"}",
+            "httpStatus": 200,
+            "code": 1028,
+            "response": "{\"code\":1028,\"message\":\"验证码无效或已过期\",\"data\":null}",
+            "expect": "code=1028",
+            "pass": true,
+            "ms": null,
+            "note": "机制层：真实码 401001 校验后仍存在（EXISTS=1）—— 失败只累加错误计数，不删码"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-9",
+            "group": "九 R5 验证码：注册接入",
+            "desc": "验证码正确：注册成功（用后即焚），随后重复注册 1001",
+            "method": "POST",
+            "url": "/auth/register",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"email\":\"p1-accept-1790517444@test.com\",\"password\":\"abc123\",\"captcha\":\"401001\"}",
+            "httpStatus": 200,
+            "code": 200,
+            "response": "{\"code\":200,\"message\":\"操作成功\",\"data\":null}",
+            "expect": "code=200；重复注册 code=1001",
+            "pass": true,
+            "ms": null,
+            "note": "机制层：注册成功后码键消失（EXISTS=0）；登录返回 200；重复注册 1001（唯一性先于验证码）"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-10",
+            "group": "九 R5 验证码：SMTP 端到端",
+            "desc": "SMTP 端到端：Mailpit 实收邮件且正文含同一验证码",
+            "method": "GET",
+            "url": "http://127.0.0.1:8025/api/v1/messages",
+            "auth": "(无)",
+            "requestBody": "(无)",
+            "httpStatus": 200,
+            "code": null,
+            "response": "{\"total\":1,\"messages\":[{\"Subject\":\"【QSXManager】注册验证码\",\"To\":[{\"Address\":\"p0-accept-1790516596@test.com\"}],\"Snippet\":\"您的注册验证码是：715746，5 分钟内有效。…\"}]}",
+            "expect": "邮件正文含与 Redis 中相同的 6 位码",
+            "pass": true,
+            "ms": null,
+            "note": "覆盖 @Async 投递 + 真实 SMTP + 正文组装；另有 CaptchaMailSmokeTest 以同一链路做自动化冒烟（Mailpit 缺席时 assumeTrue 跳过）"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-11",
+            "group": "九 R5 忘记密码",
+            "desc": "忘记密码重置成功",
+            "method": "POST",
+            "url": "/auth/forgot-password",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"email\":\"p4-accept-1790517873@test.com\",\"captcha\":\"354462\",\"newPassword\":\"reset1234\",\"confirmPassword\":\"reset1234\"}",
+            "httpStatus": 200,
+            "code": 200,
+            "response": "{\"code\":200,\"message\":\"操作成功\",\"data\":null}",
+            "expect": "code=200",
+            "pass": true,
+            "ms": null,
+            "note": "机制层：该用户 qsx:auth:at/rt/session 三键全部消失"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-12",
+            "group": "九 R5 忘记密码",
+            "desc": "重置后旧 access/refresh token 立即失效",
+            "method": "GET",
+            "url": "/auth/me",
+            "auth": "Bearer <重置前的 AT>",
+            "requestBody": "(无)",
+            "httpStatus": 401,
+            "code": null,
+            "response": "HTTP 401（未输出 body）",
+            "expect": "HTTP 401",
+            "pass": true,
+            "ms": null,
+            "note": "同一 AT 调 /auth/refresh 的姊妹断言：{\"code\":1019,\"message\":\"刷新令牌无效或已过期\"}"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-13",
+            "group": "九 R5 忘记密码",
+            "desc": "重置后的登录矩阵：新密码可用、旧密码不可用",
+            "method": "POST",
+            "url": "/auth/login",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"email\":\"p4-accept-1790517873@test.com\",\"password\":\"reset1234\"}",
+            "httpStatus": 200,
+            "code": 200,
+            "response": "{\"code\":200,\"message\":\"操作成功\",\"data\":{…}}",
+            "expect": "新密码 200",
+            "pass": true,
+            "ms": null,
+            "note": "旧密码 abc123 登录返回 code=1002"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-14",
+            "group": "九 R5 忘记密码",
+            "desc": "两次输入的新密码不一致",
+            "method": "POST",
+            "url": "/auth/forgot-password",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"email\":\"p4-accept-1790517873@test.com\",\"captcha\":\"123456\",\"newPassword\":\"reset1234\",\"confirmPassword\":\"other123\"}",
+            "httpStatus": 200,
+            "code": 1030,
+            "response": "{\"code\":1030,\"message\":\"两次输入的密码不一致\",\"data\":null}",
+            "expect": "code=1030",
+            "pass": true,
+            "ms": null,
+            "note": "一致性校验在 Service 层做，DTO 的 @AssertTrue 会被压成笼统的 400"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-15",
+            "group": "九 R5 忘记密码",
+            "desc": "防枚举：未注册邮箱与已注册邮箱错码返回完全一致",
+            "method": "POST",
+            "url": "/auth/forgot-password",
+            "auth": "(未携带 Authorization)",
+            "requestBody": "{\"email\":\"nobody-p4-accept-1790517873@test.com\",\"captcha\":\"123456\",\"newPassword\":\"reset1234\",\"confirmPassword\":\"reset1234\"}",
+            "httpStatus": 200,
+            "code": 1028,
+            "response": "{\"code\":1028,\"message\":\"验证码无效或已过期\",\"data\":null}",
+            "expect": "与已注册邮箱错码的响应逐字段一致",
+            "pass": true,
+            "ms": null,
+            "note": "对照：同一接口用 E3（已注册）+ 错码返回 {\"code\":1028,\"message\":\"验证码无效或已过期\"}，二者无差异"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-16",
+            "group": "九 R5 改密双通道",
+            "desc": "通道 B（验证码）改密成功，会话立即销毁",
+            "method": "POST",
+            "url": "/auth/change-password",
+            "auth": "Bearer <AT>",
+            "requestBody": "{\"captcha\":\"934509\",\"newPassword\":\"final1234\"}",
+            "httpStatus": 200,
+            "code": 200,
+            "response": "{\"code\":200,\"message\":\"操作成功\",\"data\":null}",
+            "expect": "code=200",
+            "pass": true,
+            "ms": null,
+            "note": "机制层：三键消失；旧 AT 调 /auth/me 返回 HTTP 401；新密码 final1234 登录 200"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-17",
+            "group": "九 R5 改密双通道",
+            "desc": "双通道都传",
+            "method": "POST",
+            "url": "/auth/change-password",
+            "auth": "Bearer <AT>",
+            "requestBody": "{\"oldPassword\":\"final1234\",\"captcha\":\"123456\",\"newPassword\":\"another12\"}",
+            "httpStatus": 200,
+            "code": 1031,
+            "response": "{\"code\":1031,\"message\":\"修改密码需提供原密码或验证码之一\",\"data\":null}",
+            "expect": "code=1031",
+            "pass": true,
+            "ms": null,
+            "note": "都传必须拒绝：否则无法判断用户意图，且会让「漏实现一段校验」的代码照样通过"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-18",
+            "group": "九 R5 改密双通道",
+            "desc": "双通道都不传",
+            "method": "POST",
+            "url": "/auth/change-password",
+            "auth": "Bearer <AT>",
+            "requestBody": "{\"newPassword\":\"another12\"}",
+            "httpStatus": 200,
+            "code": 1031,
+            "response": "{\"code\":1031,\"message\":\"修改密码需提供原密码或验证码之一\",\"data\":null}",
+            "expect": "code=1031",
+            "pass": true,
+            "ms": null,
+            "note": ""
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-19",
+            "group": "九 R5 改密双通道",
+            "desc": "通道 B 验证码错误",
+            "method": "POST",
+            "url": "/auth/change-password",
+            "auth": "Bearer <AT>",
+            "requestBody": "{\"captcha\":\"000001\",\"newPassword\":\"another12\"}",
+            "httpStatus": 200,
+            "code": 1028,
+            "response": "{\"code\":1028,\"message\":\"验证码无效或已过期\",\"data\":null}",
+            "expect": "code=1028",
+            "pass": true,
+            "ms": null,
+            "note": "另有自动化用例断言「密码不变」（原密码仍可登录）"
+          },
+          {
+            "roundId": "R5-20260927",
+            "id": "R5-20",
+            "group": "九 R5 改密双通道",
+            "desc": "通道 B 不能使用他人的验证码",
+            "method": "POST",
+            "url": "/auth/change-password",
+            "auth": "Bearer <用户A的 AT>",
+            "requestBody": "{\"captcha\":\"<用户B的改密码>\",\"newPassword\":\"another12\"}",
+            "httpStatus": 200,
+            "code": 1028,
+            "response": "{\"code\":1028,\"message\":\"验证码无效或已过期\",\"data\":null}",
+            "expect": "code=1028",
+            "pass": true,
+            "ms": null,
+            "note": "校验按当前登录用户的邮箱取码，B 的码在 A 的键空间下不存在"
           }
         ]
       }
