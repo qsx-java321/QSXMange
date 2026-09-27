@@ -109,6 +109,12 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException(ResultCode.EMAIL_ALREADY_REGISTERED);
         }
 
+        // 验证码校验刻意放在唯一性之后，两个理由：
+        // ① 校验成功即用后即焚——若先校验，已注册邮箱的重试会把用户手里那张有效的码烧掉，
+        //    用户得重新等 60 秒才能再拿一张；
+        // ② 保持「重复注册返回 1001」的既有语义，不会因为缺码/错码先撞上验证码错误。
+        captchaService.verify(CaptchaScene.REGISTER, request.getEmail(), request.getCaptcha());
+
         User user = new User();
         user.setEmail(request.getEmail());
         user.setPassword(passwordEncoder.encode(request.getPassword()));

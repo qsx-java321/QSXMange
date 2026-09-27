@@ -1,7 +1,9 @@
 package com.qsx;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.qsx.common.constant.CaptchaScene;
 import com.qsx.domain.entity.User;
+import com.qsx.service.captcha.CaptchaRedisKeys;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -47,6 +49,53 @@ class AuthControllerTest extends BaseIntegrationTest {
 
         JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
         assertThat(json.path("code").asInt()).isEqualTo(1001);
+    }
+
+    @Test
+    @DisplayName("注册验证码错误被拒，且不消耗用户手里那张有效的码")
+    void register_wrongCaptcha() throws Exception {
+        String email = uniqueEmail("reg-cap-wrong");
+        String realCode = registerCaptcha(email);
+        // 取一个必然不同于真实码的值（真实码恰好是占位值时换一个，避免概率性断言）
+        String wrongCode = realCode.equals(FALLBACK_CAPTCHA) ? "111111" : FALLBACK_CAPTCHA;
+
+        MvcResult result = mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + email + "\",\"password\":\"abc123\",\"captcha\":\""
+                                + wrongCode + "\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(json.path("code").asInt()).isEqualTo(1028);
+
+        // 机制层：一次失败只应累加错误计数，不能把码删掉
+        assertThat(stringRedisTemplate.opsForValue()
+                .get(CaptchaRedisKeys.code(CaptchaScene.REGISTER, email)))
+                .as("校验失败不应消耗验证码")
+                .isEqualTo(realCode);
+
+        // 换正确的码仍能注册成功——证明上面那张码确实还活着，而不是"又存了一张同值的"
+        MvcResult retry = mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + email + "\",\"password\":\"abc123\",\"captcha\":\""
+                                + realCode + "\"}"))
+                .andReturn();
+        assertThat(objectMapper.readTree(retry.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("注册缺验证码")
+    void register_missingCaptcha() throws Exception {
+        MvcResult result = mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + uniqueEmail("reg-cap-miss") + "\",\"password\":\"abc123\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(json.path("code").asInt()).isEqualTo(400);
     }
 
     @Test

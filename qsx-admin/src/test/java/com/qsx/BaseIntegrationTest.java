@@ -8,6 +8,7 @@ import com.qsx.domain.entity.User;
 import com.qsx.mapper.RoleMapper;
 import com.qsx.mapper.UserMapper;
 import com.qsx.mapper.UserRoleMapper;
+import com.qsx.common.constant.CaptchaScene;
 import com.qsx.security.session.AuthRedisKeys;
 import com.qsx.service.captcha.CaptchaRedisKeys;
 import com.qsx.service.UserService;
@@ -89,6 +90,12 @@ public abstract class BaseIntegrationTest {
 
     /** 测试用户邮箱特征（uniqueEmail 生成），用于把测试数据与预置种子数据隔离 */
     private static final String TEST_EMAIL_LIKE = "%@test.com%";
+
+    /**
+     * 取不到验证码时的占位值（见 {@link #register}）。
+     * 服务端「唯一性先于验证码」，走这条分支的场景都停在唯一性校验上，占位码不会被真正比对。
+     */
+    protected static final String FALLBACK_CAPTCHA = "000000";
 
     /**
      * 测试角色编码前缀（各测试类的 uniqueRoleCode 统一使用）。
@@ -201,13 +208,47 @@ public abstract class BaseIntegrationTest {
     }
 
     /**
-     * 注册一个用户，密码默认 abc123
+     * 注册一个用户，密码默认 abc123。
+     *
+     * <p>注册已要求邮箱验证码，这里走**真实发码链路**：先调 {@code POST /auth/captcha}，
+     * 再从 Redis 读出验证码随注册提交。好处是各测试类里几十处 {@code register(...)}
+     * 调用点一行都不用改，且注册用例顺带覆盖了发码链路。
+     *
+     * <p>兜底：邮箱已注册（发码返回 1001）或触发 60 秒限流时拿不到码，此时用占位码提交——
+     * 服务端是「唯一性先于验证码」，该场景下注册仍返回 1001，断言语义不受影响。
      */
     protected MvcResult register(String email, String password) throws Exception {
         return mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"email\":\"" + email + "\",\"password\":\"" + password + "\"}"))
+                        .content("{\"email\":\"" + email + "\",\"password\":\"" + password
+                                + "\",\"captcha\":\"" + registerCaptcha(email) + "\"}"))
                 .andReturn();
+    }
+
+    /**
+     * 走真实发码接口取一张注册验证码；取不到时返回 {@link #FALLBACK_CAPTCHA}（见 {@link #register}）。
+     *
+     * <p>同一用例里对同一邮箱注册两次（如「删除后释放邮箱再注册」）会撞上 60 秒发送间隔，
+     * 此时删掉间隔标记重发一次——那正是真实用户等满 60 秒的效果，用例不可能真的去等。
+     * 重发仍拿不到码（邮箱已注册 → 1001）才回落到占位码。
+     */
+    protected String registerCaptcha(String email) throws Exception {
+        String code = sendCaptchaAndReadCode(email);
+        if (code == null) {
+            stringRedisTemplate.delete(CaptchaRedisKeys.limit(CaptchaScene.REGISTER, email));
+            code = sendCaptchaAndReadCode(email);
+        }
+        return code == null ? FALLBACK_CAPTCHA : code;
+    }
+
+    private String sendCaptchaAndReadCode(String email) throws Exception {
+        mockMvc.perform(post("/auth/captcha")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"scene\":\"" + CaptchaScene.REGISTER.name()
+                                + "\",\"email\":\"" + email + "\"}"))
+                .andReturn();
+        return stringRedisTemplate.opsForValue()
+                .get(CaptchaRedisKeys.code(CaptchaScene.REGISTER, email));
     }
 
     /**
