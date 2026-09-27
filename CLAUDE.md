@@ -26,9 +26,11 @@ java -jar qsx-admin/target/qsx-admin-1.0.0.jar     # 先 package，再直接跑 
 
 > **不要用 `mvn -pl qsx-admin -am spring-boot:run`**：`-am` 会把其余 4 个模块拉进 reactor 并对它们也执行 `spring-boot:run`，它们没有主类，会直接 `BUILD FAILURE`。
 
-**前置条件**：MySQL 8.4（`localhost:3306/QSXManager`，root/123456）与 Redis 7.4（`localhost:6379`）都在 Docker 中运行，且**两者都必须可用**——认证链路依赖 Redis，Redis 不可用时绝大部分需要登录态的用例会因 401 失败。依赖已缓存后 `-o` 离线可跑。
+**前置条件**：MySQL 8.4（`localhost:3306/QSXManager`，root/123456）与 Redis 7.4（`localhost:6379`）都在 Docker 中运行，且**两者都必须可用**——认证链路依赖 Redis，Redis 不可用时绝大部分需要登录态的用例会因 401 失败。**Mailpit**（SMTP `localhost:1025`）用于验证码邮件：应用不要求它在跑（投递是异步的，失败只记 ERROR 日志），但 `CaptchaMailSmokeTest` 会因连不上而 `assumeTrue` 跳过——跑全量时保持它运行才能覆盖真实投递链路。
 
-**测试直接复用本地开发库与开发 Redis**（没有独立测试库）。清理范围：`sys_user` 中 `email LIKE '%@test.com%'` 的测试用户、`test-%` 前缀的测试角色/菜单（含逻辑删除行）及其两侧关联、全部 `sys_operation_log`、Redis 中全部 `qsx:auth:*` 键。因此：**不要在本地应用正服务会话时跑测试**（会清掉在线会话的 Redis 键）。
+首次引入新依赖（如 `spring-boot-starter-mail`）需要联网拉一次，之后 `-o` 离线可跑。
+
+**测试直接复用本地开发库与开发 Redis**（没有独立测试库）。清理范围：`sys_user` 中 `email LIKE '%@test.com%'` 的测试用户、`test-%` 前缀的测试角色/菜单（含逻辑删除行）及其两侧关联、全部 `sys_operation_log`、Redis 中按**显式前缀清单** SCAN 删除的 `qsx:auth:{perm,at,rt,session,cap}:*`（**不是 `qsx:auth:*` 通配**——新增一类键必须登记进清单，否则会跨用例残留并污染限流/计数类断言）。因此：**不要在本地应用正服务会话时跑测试**（会清掉在线会话的 Redis 键）。
 
 初始化/重建数据库（**会清空既有数据**）：
 
@@ -71,7 +73,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 
 - 三个多键操作全部走 Lua 原子脚本（`qsx-security/src/main/resources/lua/auth_session_*.lua`，**脚本必须与 `AuthSessionServiceImpl` 同模块**，否则 `ClassPathResource` 加载失败），实现在 `qsx-security` 的 `security/session/AuthSessionServiceImpl`——**改会话行为先读这三个脚本的头部注释**，里面写明了每条约定的原因。
 - 请求链路：`TokenAuthenticationFilter`（Redis 反查 userId）→ `SecurityUserDetailsService.loadUserById`（实时查库 + 权限缓存）→ `isEnabled()` → 写入 SecurityContext。
-- 吊销入口统一为 `AuthSessionService.remove(userId)`，调用点：登出、踢人、禁用、删除用户、改密。**新增任何涉及账号状态或凭据的用户生命周期变更，必须一并清理会话**，否则旧令牌仍然有效。
+- 吊销入口统一为 `AuthSessionService.remove(userId)`，调用点共**六处**：登出、踢人、禁用、删除用户、改密、忘记密码重置。**新增任何涉及账号状态或凭据的用户生命周期变更，必须一并清理会话**，否则旧令牌仍然有效。
 - **fail 策略分级**：会话层 fail-closed（Redis 故障 = 拒绝认证，宁可不放行）；权限缓存 fail-open（Redis 异常降级查库）。两者边界不可混淆。
 
 ### 邮箱验证码
@@ -108,7 +110,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 ### 统一返回与审计
 
 - 所有接口返回 `Result{code,message,data}`。**业务异常返回 HTTP 200 + body 里的业务码**（`GlobalExceptionHandler`），断言要看业务码而不是 HTTP 状态。
-- 操作日志由 `OperationLogAspect`（`qsx-framework`）对 `com.qsx.web.controller` 包级扫描，以 `Result.code==200` 判定成功，经 `AccessLogRecorder` 端口异步落库；401 由 `RestAuthenticationEntryPoint` 补记、400 由异常处理器补记。
+- 操作日志由 `OperationLogAspect`（`qsx-framework`）对 `com.qsx.web.controller` 包级扫描，以 `Result.code==200` 判定成功，经 `AccessLogRecorder` 端口异步落库；401 由 `RestAuthenticationEntryPoint` 补记、`@PreAuthorize` 的 403 由切面捕获、URL 级 403 由 `RestAccessDeniedHandler` 补记、400 由异常处理器补记。**`/api/logs` 前缀被切面整体排除**（避免日志的日志无限膨胀）——其查询与删除都不进审计表，属已知缺口（见设计文档 05 §7）。
 - **`@Async` 不得自调用**：`OperationLogServiceImpl.record()` 上的 `@Async` 靠 Spring 代理生效，若改成同类内部调用（如再包一层 `this.xxx()`）会静默失效——日志落库退化为同步、主请求被数据库写入阻塞，且**没有编译错误**。
 
 ## 必须遵守的项目约定（都是踩过坑换来的）
@@ -116,7 +118,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 - **Lua 脚本参数必须是字符串**：`StringRedisTemplate` 用 `StringRedisSerializer` 序列化参数，传 `Long`/`Integer` 会在触达 Redis 前抛 `ClassCastException`（登录全线 500）。调用侧统一 `String.valueOf(...)`，脚本内 `tonumber()`。
 - **Lua 读 Hash 字段用 `HGET`，不要用 `HGETALL`**：RESP2 下后者返回的是数组而非 map，字段访问恒为 `nil`——曾导致「即时踢下线」静默失效（`remove` 永远删不掉 AT 键）。
 - **Lua 写入顺序固定为「先清旧 → 写 session → 写令牌键」**：Lua 报错不回滚，这个顺序保证崩溃时留下的是死令牌（安全）而不是无法吊销的裸令牌。
-- **TTL 一律整数秒且下限为 1**：`SET ... EX 0` 报错而 `EXPIRE key 0` 会直接删键。`AuthSessionProperties` 有启动期校验，纯数字配置会被当作毫秒（`30` 是 30 毫秒，不是 30 天）。
+- **TTL 一律整数秒且下限为 1**：`SET ... EX 0` 报错而 `EXPIRE key 0` 会直接删键。`AuthSessionProperties` 与 `CaptchaProperties` 都有启动期校验，纯数字配置会被当作毫秒（`30` 是 30 毫秒，不是 30 天）。
 - **限流计数必须原子，且 TTL 只能在首次设置**：`INCR` 与 `EXPIRE` 分开写，中断就会留下没有 TTL 的键（该 key 永久锁死）；每次都 `EXPIRE` 则窗口滑动、上限永不触发。验证码四键的做法见 `captcha_send.lua`（日期串键 + 仅计数为 1 时设 TTL）。
 - **无事务时发布的事件会被静默丢弃**：`@TransactionalEventListener` 默认 `fallbackExecution=false`。给非 `@Transactional` 方法补发失效事件时必须同时加事务，或显式设置 fallback。
 - **测试清理禁用全表删除**：`DELETE FROM sys_user` 会删掉预置超管；`userMapper.delete(null)` 更会因 `@TableLogic` 变成全表逻辑删除。只清测试用户（`email LIKE '%@test.com%'`）与 `test-` 前缀的测试角色/菜单。
@@ -126,7 +128,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 
 ## 测试
 
-`BaseIntegrationTest` 提供：`register`（**内部走真实发码链路**：调 `/auth/captcha` → 从 Redis 取码 → 带码注册，故各测试类的 `register(...)` 调用点无需关心验证码）/ `loginGetToken` / `loginGetAuth`（返回 `token`/`refreshToken`/`userId`/`email`）、`postJson` / `bearerHeader` / `uniqueEmail` / `adminToken()`（走真实 `assignRoles` 链路构造超管）。用例前后自动清理测试用户、测试角色（`test-` 前缀，含逻辑删除行）、操作日志表，并清空 Redis 会话与权限缓存键。
+`BaseIntegrationTest` 提供：`register`（**内部走真实发码链路**：调 `/auth/captcha` → 从 Redis 取码 → 带码注册，故各测试类的 `register(...)` 调用点无需关心验证码）/ `loginGetToken` / `loginGetAuth`（返回 `token`/`refreshToken`/`userId`/`email`）、`postJson` / `bearerHeader` / `uniqueEmail` / `adminToken()`（走真实 `assignRoles` 链路构造超管）。用例前后自动清理测试用户、测试角色（`test-` 前缀，含逻辑删除行）、操作日志表，并按前缀清单清空 Redis 的会话 / 权限缓存 / 验证码键。
 
 `SessionLuaTest` 是唯一直连会话层的测试（不经 HTTP），覆盖原子性、并发双花、清理完整性——**改动 Lua 脚本后必须让它全绿**。
 
@@ -139,4 +141,4 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
   **改代码前先读对应那一篇**；`05` 的 §7 是已知缺口清单（本地阶段有意搁置的问题都在那里）。
   约定：实施类计划文档在功能交付后归档删除（内容并入设计文档与会话总结，历史见 git 记录）。
 - `docs/test/项目测试报告.md`：**全项目测试总报告**（五轮合并：36 接口覆盖矩阵、204 例自动化基线、191 条真实 HTTP 逐接口明细、累计 16 处产品缺陷与 7 项观察项、环境清理验收）；验证码轮次见 §九，原始请求/响应见同目录 `项目测试报告.json`
-- `docs/session-notes/qsxmanager/`：`会话总结-qsxmanager全项目.md` 是主线总览（含设计约束与有意取舍）；早期阶段增量总结已合并归档删除，早期测试细节已并入 `docs/test/项目测试报告.md`
+- `docs/session-notes/qsxmanager/`：`会话总结-qsxmanager全项目.md` 是**主线总览**（阶段脉络、设计约束与有意取舍）；单次会话的详细复盘写 `会话总结-<主题>-<日期>.md` 增量文件（如 `会话总结-验证码功能实施与文档重构-20260927.md`），总总结只保留主线并指向它们。早期增量总结已合并删除，早期测试细节已并入 `docs/test/项目测试报告.md`
