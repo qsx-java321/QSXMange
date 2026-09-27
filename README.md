@@ -293,8 +293,10 @@ curl -X POST http://localhost:8080/auth/login \
 
 ```bash
 mvn test                              # 全量（仅 qsx-admin 有测试，共 171 例）
-mvn test -Dtest=SessionLuaTest        # 单个测试类
-mvn test -Dtest='RbacTest,MenuTest'   # 多个类必须加引号
+# 只跑部分测试类时必须带 -Dsurefire.failIfNoSpecifiedTests=false：
+# 多模块 reactor 的其余模块没有匹配的测试类，surefire 默认会因此报错
+mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false        # 单个测试类
+mvn test -Dtest='RbacTest,MenuTest' -Dsurefire.failIfNoSpecifiedTests=false   # 多个类必须加引号
 ```
 
 测试复用本地 MySQL 的 QSXManager 库与本地 Redis，**两者都必须可用**：认证链路依赖 Redis，Redis 不可用时绝大部分需要登录态的用例会因 401 失败。

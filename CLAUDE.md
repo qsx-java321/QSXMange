@@ -8,9 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 mvn -o -DskipTests compile        # 快速编译（离线可用，5 个模块）
 mvn -o -DskipTests package        # 打包（仅 qsx-admin 产出可执行 fat jar）
 mvn test                          # 全量测试（171 例；仅 qsx-admin 有测试）
-mvn test -Dtest=SessionLuaTest    # 单个测试类
-mvn test -Dtest='SessionLuaTest#rotate_replayOldRefreshToken_rejected'   # 单个方法
-mvn test -Dtest='RbacTest,MenuTest'                                      # 多个类必须加引号
+
+# 指定测试类时**必须**带 -Dsurefire.failIfNoSpecifiedTests=false：
+# 多模块 reactor 会让 -Dtest 同时作用于 5 个模块，其余 4 个模块没有匹配的测试类，
+# surefire 默认视为错误并直接 BUILD FAILURE（报 "No tests matching pattern ... were executed!"）
+mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false
+mvn test -Dtest='SessionLuaTest#rotate_replayOldRefreshToken_rejected' -Dsurefire.failIfNoSpecifiedTests=false
+mvn test -Dtest='RbacTest,MenuTest' -Dsurefire.failIfNoSpecifiedTests=false   # 多个类必须加引号
 ```
 
 启动（多模块中只有 `qsx-admin` 可执行）：
@@ -114,6 +118,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 
 - `README.md`：技术栈、完整接口表（含权限码）、错误码表、快速开始
 - `docs/design/springboot项目设计.md`：设计规格（架构/模块划分、认证流程、数据表、注意事项）
-- `docs/design/验证码功能改造计划方案.md`：邮箱验证码能力引入计划（规划中未实行，含 Mailpit + @Async 异步投递通道设计）
+- `docs/design/验证码功能实施方案.md`：**当前实施依据**（定稿待批，2026-09-27 逐条核对代码后重写，含 Mailpit + @Async 投递、Lua 原子限流、测试取码方式与阶段验收）
+- `docs/design/验证码功能改造计划方案.md`：旧参考稿（**已被上者取代**，仅历史留存）
 - `docs/test/项目测试报告.md`：**全项目测试总报告**（四轮合并：34 接口覆盖矩阵、171 例自动化基线、171 条真实 HTTP 逐接口明细、累计 16 处产品缺陷与 7 项观察项、环境清理验收）；原始请求/响应见同目录 `项目测试报告.json`
 - `docs/session-notes/qsxmanager/`：`会话总结-qsxmanager全项目.md` 是主线总览（含设计约束与有意取舍）；早期阶段增量总结已合并归档删除，早期测试细节已并入 `docs/test/项目测试报告.md`
