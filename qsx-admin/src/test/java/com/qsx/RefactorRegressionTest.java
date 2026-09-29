@@ -102,6 +102,10 @@ class RefactorRegressionTest extends BaseIntegrationTest {
         assertThat(account.status()).isEqualTo(dbRow.getStatus());
         assertThat(account.createTime()).isEqualTo(dbRow.getCreateTime());
         assertThat(account.updateTime()).isEqualTo(dbRow.getUpdateTime());
+        // 本行是**有意补的**：record 加组件不会让逐字段断言自动覆盖它，
+        // 漏搬运的表现是「标志恒为 false」——一个不会有任何报错的安全缺口
+        assertThat(account.mustChangePassword())
+                .isEqualTo(Boolean.TRUE.equals(dbRow.getMustChangePassword()));
 
         // UserDetails 契约不得因改造而改变
         assertThat(securityUser.getId()).isEqualTo(dbRow.getId());

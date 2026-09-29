@@ -8,6 +8,7 @@ import com.qsx.web.dto.excel.UserImportRow;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -38,7 +39,14 @@ class UserImportExportTest extends BaseIntegrationTest {
 
     private static final String EXCEL_CONTENT_TYPE =
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    private static final String DEFAULT_PASSWORD = "qsx123456";
+
+    /**
+     * 导入默认口令。**从配置注入而不是写死字面量**：该值已被外部化为
+     * {@code ${IMPORT_DEFAULT_PASSWORD:qsx123456}}，开发者机器上一旦设了这个环境变量，
+     * 写死的字面量会让本类的哈希断言转红，而原因极难定位。
+     */
+    @Value("${import.default-password}")
+    private String defaultPassword;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -81,11 +89,19 @@ class UserImportExportTest extends BaseIntegrationTest {
         assertNotNull(u1);
         assertEquals("导入用户一", u1.getNickname());
         assertEquals(0, u1.getStatus());
-        assertTrue(passwordEncoder.matches(DEFAULT_PASSWORD, u1.getPassword()));
+        assertTrue(passwordEncoder.matches(defaultPassword, u1.getPassword()));
 
         User u2 = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getEmail, email2));
         assertNotNull(u2);
         assertEquals(email2, u2.getNickname());
+
+        // 导入落库即置「必须首次改密」：全批次共用同一个公开口令，不强制改密等于批量签发
+        // 已知口令的账号（docs/question-list/01 #4）。
+        // ⚠️ 这条断言同时是 **UserMapper.insertBatch 列清单**的守卫——那条 SQL 是手写的
+        // INSERT ... VALUES <foreach>，列清单里漏掉 must_change_password 就会静默取 DB 默认 0，
+        // 别的用例都不会红，只有这里会。
+        assertEquals(Boolean.TRUE, u1.getMustChangePassword());
+        assertEquals(Boolean.TRUE, u2.getMustChangePassword());
 
         // 角色绑定：仅 email1 绑定了该角色
         List<UserRole> rolesOfU1 = userRoleMapper.selectList(

@@ -1,0 +1,38 @@
+# 生产形态配置：--spring.profiles.active=prod（或环境变量 SPRING_PROFILES_ACTIVE=prod）
+#
+# 本文件的唯一设计原则是 **危险默认值一概不提供**：
+# `${DB_PASSWORD}` / `${IMPORT_DEFAULT_PASSWORD}` 后面**没有** `:默认值`，
+# 环境变量缺失时 Spring 会在启动阶段直接报 "Could not resolve placeholder" 并终止——
+# 这是零代码的 fail-fast：宁可起不来，也不要带着仓库里公开的口令起来。
+#
+# 注意本文件**覆盖**而非合并 application.yml 的同名键，所以这里写的每一条都必须是
+# 生产形态真正想要的值。application.yml 的 `${X:开发默认值}` 写法只服务于本地开箱即用。
+#
+# 需要提供的环境变量：
+#   DB_USERNAME / DB_PASSWORD          数据库账号口令（切勿用 root / 123456）
+#   IMPORT_DEFAULT_PASSWORD            导入用户的临时初始口令（导入账号首次登录会被强制改密，
+#                                      但它仍是「一批账号共用的已知口令」，必须换掉）
+#
+# 另见 ProdSecurityGuard 的启动期自检：它拦的是「提供了值、但值本身是仓库公开值」的情形，
+# 与本文件拦「压根没提供」互补，两者都不可省。
+
+spring:
+  datasource:
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  # ⚠️ 邮件仍是本地 Mailpit 的配置（docs/question-list 的 #6 为主动搁置项）。
+  #    公网部署前必须改 spring.mail.* 指向真实邮件服务商，并同步改 qsx.captcha.from-address。
+
+import:
+  default-password: ${IMPORT_DEFAULT_PASSWORD}
+
+qsx:
+  captcha:
+    # 生产形态**必须**为 false。置 true 时验证码随接口响应直接返回 data.code，
+    # 任意匿名调用者都能拿到验证码，邮箱验证完全失效（#5）。
+    # 这条同时被 ProdSecurityGuard 在启动期复检——两处都留着，改一处不会静默生效。
+    debug: false
+
+logging:
+  level:
+    com.qsx: info

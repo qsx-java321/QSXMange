@@ -280,6 +280,14 @@ public abstract class BaseIntegrationTest {
      */
     protected LoginSession loginGetAuth(String email, String password) throws Exception {
         register(email, password);
+        return loginOnlyGetAuth(email, password);
+    }
+
+    /**
+     * 只登录，不先注册——账号已存在（后台建号 / 导入）时用它，
+     * 免得白白走一遍注册（会撞 60 秒发码间隔，还可能因邮箱已注册返回 1001）。
+     */
+    protected LoginSession loginOnlyGetAuth(String email, String password) throws Exception {
         MvcResult result = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"" + email + "\",\"password\":\"" + password + "\"}"))
@@ -346,7 +354,7 @@ public abstract class BaseIntegrationTest {
      * 「预置超管登录 1002」，然后经 {@code adminToken()} 扇出的 15 个测试类
      * 以同一条 {@code IllegalStateException} 报错，定位成本极高。
      */
-    private static final String PRESET_ADMIN_PASSWORD_HASH =
+    protected static final String PRESET_ADMIN_PASSWORD_HASH =
             "$2a$10$3KuSUz6n6SzyMXi535r3Su/qP6AaVWdCvjNUx0FWVFj4DS4tca3By";
 
     /**
