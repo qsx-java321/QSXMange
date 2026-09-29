@@ -72,7 +72,9 @@ public enum ResultCode {
     // 内置资产不可破坏 (1033 起)：与 1011（内置角色不可删）/1026（内置角色不可停用）同一家族——
     // 判定只看「目标是不是内置资产」，与操作者身份解耦；一旦拒绝，库中状态必须原样不动
     // 1034 已预留给「授予 ADMIN 需操作者为超管」（docs/question-list/03 的闸 2，当前后置），请勿占用
-    ADMIN_USER_ROLE_IMMUTABLE(1033, "内置超管用户的角色不可修改");
+    ADMIN_USER_ROLE_IMMUTABLE(1033, "内置超管用户的角色不可修改"),
+    // 文案与 1016/1023 的「菜单或权限…」口径一致：本闸同时覆盖权限码行与预置菜单行
+    SYSTEM_PERMISSION_CANNOT_DELETE(1035, "系统内置菜单或权限不可删除");
 
     private final int code;
     private final String message;

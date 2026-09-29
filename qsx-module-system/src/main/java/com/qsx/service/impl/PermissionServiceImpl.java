@@ -155,7 +155,15 @@ public class PermissionServiceImpl implements PermissionService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
-        getPermission(id);
+        Permission permission = getPermission(id);
+        // 主闸：系统内置的菜单/权限行不可删除（与「内置角色不可删 1011 / 不可停用 1026」对称）。
+        // 删掉一个内置权限码行 → 对应接口对**所有人永久 403**（ADMIN 的关联也被连坐清掉），
+        // 而 uk_perm_code 是物理唯一索引 + 判重含已删行 ⇒ 同 code 无法经接口重建，只能改库。
+        // 刻意排在「子节点检查」之前：一个既有子节点又是内置的节点（如 system），
+        // 先报「内置不可删」比先报「有子菜单」更接近操作者真正需要知道的原因。
+        if (PermissionConstants.BUILT_IN_CODES.contains(permission.getCode())) {
+            throw new BusinessException(ResultCode.SYSTEM_PERMISSION_CANNOT_DELETE);
+        }
         // 存在子节点禁止删除，防止孤立子树
         Long childCount = permissionMapper.selectCount(
                 new LambdaQueryWrapper<Permission>().eq(Permission::getParentId, id));

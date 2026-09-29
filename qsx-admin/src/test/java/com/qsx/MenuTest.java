@@ -2,6 +2,7 @@ package com.qsx;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.qsx.common.constant.PermissionConstants;
 import com.qsx.domain.entity.RolePermission;
 import com.qsx.domain.entity.User;
 import com.qsx.mapper.PermissionMapper;
@@ -14,6 +15,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -358,5 +360,69 @@ class MenuTest extends BaseIntegrationTest {
         return permissionMapper.selectOne(
                 new LambdaQueryWrapper<com.qsx.domain.entity.Permission>()
                         .eq(com.qsx.domain.entity.Permission::getCode, code)).getId();
+    }
+
+    // ---------- 系统内置行不可删除（1035） ----------
+
+    @Test
+    @DisplayName("删除系统内置权限码行被拒 1035，且其角色关联原样保留")
+    void builtinPermission_delete_rejected_1035() throws Exception {
+        String token = adminToken();
+        long permId = permIdByCode(PermissionConstants.ROLE_UPDATE);
+        long relationsBefore = rolePermissionMapper.selectCount(
+                new LambdaQueryWrapper<RolePermission>().eq(RolePermission::getPermissionId, permId));
+        assertThat(relationsBefore).as("前置：内置权限码本就被 ADMIN 绑定").isPositive();
+
+        MvcResult del = mockMvc.perform(delete("/api/menus/" + permId)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk()).andReturn();
+
+        assertThat(objectMapper.readTree(del.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1035);
+        // 机制层：拦截必须发生在「物理清关联」与「逻辑删除」之前——只断言业务码的话，
+        // 一个「先清关联再报错」的实现也能骗过测试，而 ADMIN 的授权已被悄悄摘掉一块
+        assertThat(permissionMapper.selectById(permId)).as("权限行仍在").isNotNull();
+        assertThat(rolePermissionMapper.selectCount(
+                new LambdaQueryWrapper<RolePermission>().eq(RolePermission::getPermissionId, permId)))
+                .as("角色-权限关联既不能被清、也不能被改")
+                .isEqualTo(relationsBefore);
+    }
+
+    @Test
+    @DisplayName("删除预置菜单行同样被拒 1035，且优先于「存在子节点 1014」")
+    void builtinMenu_delete_rejected_1035() throws Exception {
+        String token = adminToken();
+        long menuId = permIdByCode(PermissionConstants.MENU_ENTRY_USER);
+        long relationsBefore = rolePermissionMapper.selectCount(
+                new LambdaQueryWrapper<RolePermission>().eq(RolePermission::getPermissionId, menuId));
+
+        MvcResult del = mockMvc.perform(delete("/api/menus/" + menuId)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk()).andReturn();
+
+        // system-user 本身还有一堆 user:* 子节点：若主闸排在子节点检查之后，这里会返回 1014，
+        // 操作者会以为"把子节点删掉就能删掉它"，而事实是永远不行
+        assertThat(objectMapper.readTree(del.getResponse().getContentAsString()).path("code").asInt())
+                .isEqualTo(1035);
+        assertThat(permissionMapper.selectById(menuId)).isNotNull();
+        assertThat(rolePermissionMapper.selectCount(
+                new LambdaQueryWrapper<RolePermission>().eq(RolePermission::getPermissionId, menuId)))
+                .isEqualTo(relationsBefore);
+    }
+
+    @Test
+    @DisplayName("机制层：BUILT_IN_CODES 与库中预置数据一一对应（漏登记一个即转红）")
+    void builtInCodes_matchPresetData() {
+        List<String> presetCodes = permissionMapper
+                .selectList(new LambdaQueryWrapper<com.qsx.domain.entity.Permission>())
+                .stream()
+                .map(com.qsx.domain.entity.Permission::getCode)
+                .filter(code -> !code.startsWith(TEST_PREFIX))
+                .toList();
+
+        assertThat(presetCodes).as("前置：库中应恰好只有 init.sql 预置的 29 个 code").hasSize(29);
+        assertThat(PermissionConstants.BUILT_IN_CODES)
+                .as("保护集合必须与预置数据一一对应：漏一个 = 该行可被删且无法经接口重建")
+                .containsExactlyInAnyOrderElementsOf(presetCodes);
     }
 }
