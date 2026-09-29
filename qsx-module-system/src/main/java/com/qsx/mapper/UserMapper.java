@@ -24,7 +24,13 @@ public interface UserMapper extends BaseMapper<User> {
      * 一个不会有任何报错的安全缺口。
      *
      * <p>取值走 {@code #{item.mustChangePassword}} 而不是写死 1：让实体始终是唯一真源。
-     * 该列 NOT NULL 且无默认值之外的兜底，漏赋值会以 1048 直接失败——这是**良性失败**。
+     * 两种漏法的后果**不同**，别把前者当成后者：
+     * <ul>
+     *   <li>列清单里**没有这一列** → 取 DB 默认值 0，**静默通过**（实测：12 个导入用例里
+     *       只有那条专门断言标志的会红）；</li>
+     *   <li>列在、实体字段为 null → {@code Field 'must_change_password' doesn't have a default value}（1048），
+     *       当场失败。</li>
+     * </ul>
      */
     @Insert("<script>" +
             "INSERT INTO sys_user(email, password, nickname, status, must_change_password, create_time, update_time, deleted) VALUES " +
