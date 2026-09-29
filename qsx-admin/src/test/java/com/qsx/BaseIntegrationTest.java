@@ -86,7 +86,7 @@ public abstract class BaseIntegrationTest {
             AuthRedisKeys.AT_PREFIX,
             AuthRedisKeys.RT_PREFIX,
             AuthRedisKeys.SESSION_PREFIX,
-            // 邮箱验证码四键：code / attempt / limit / daily
+            // 邮箱验证码五键：code / attempt / limit / daily / ipdaily（前缀相同，一并清）
             CaptchaRedisKeys.PREFIX);
 
     /** 测试用户邮箱特征（uniqueEmail 生成），用于把测试数据与预置种子数据隔离 */
@@ -350,7 +350,7 @@ public abstract class BaseIntegrationTest {
      * 预置超管在 init.sql 里的初始口令 hash（必须与 {@link #PRESET_ADMIN_PASSWORD} 对应）。
      *
      * <p>与 sql/init.sql 的种子行是**两份手工同步的真源**，新增守卫用例
-     * {@code PresetAdminFixtureTest} 会在两者失配时立刻转红——否则表现是
+     * {@code MustChangePasswordTest#presetAdminFixture_isSelfConsistent} 会在两者失配时立刻转红——否则表现是
      * 「预置超管登录 1002」，然后经 {@code adminToken()} 扇出的 15 个测试类
      * 以同一条 {@code IllegalStateException} 报错，定位成本极高。
      */

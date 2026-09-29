@@ -177,7 +177,7 @@ class RefactorRegressionTest extends BaseIntegrationTest {
     // ---------- R6：审计记录的操作人仍来自 SecurityUser 快照 ----------
 
     @Test
-    @DisplayName("R6 审计日志的 userId/username 必须来自 SecurityUser 快照（4 个补记点改造点）")
+    @DisplayName("R6 审计日志的 userId/username 必须来自 SecurityUser 快照（五处补记之一）")
     void auditLog_capturesUserFromSecurityUserSnapshot() throws Exception {
         LoginSession session = loginGetAuth(uniqueEmail("audit"), "abc123");
 

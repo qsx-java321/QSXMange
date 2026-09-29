@@ -21,7 +21,12 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 @Configuration
 public class CaptchaLuaConfig {
 
-    /** 发送脚本返回 'OK' / 'GAP' / 'QUOTA' */
+    /**
+     * 发送脚本返回 'OK' / 'GAP' / 'QUOTA' / 'IP_QUOTA'
+     *
+     * <p>'IP_QUOTA' 与 'QUOTA' 是两种不同的超限（来源维度 / 邮箱维度），但业务上都映射为 1027；
+     * 区别在副作用：'IP_QUOTA' 在脚本第一步就返回，**那次请求什么都没写**。
+     */
     @Bean
     public DefaultRedisScript<String> captchaSendScript() {
         return load("lua/captcha_send.lua");
