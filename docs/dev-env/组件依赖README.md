@@ -152,7 +152,7 @@ docker run -d \
   -p 15672:15672 \
   -v rabbitmq-data:/var/lib/rabbitmq \
   -e RABBITMQ_DEFAULT_USER=admin \
-  -e RABBITMQ_DEFAULT_PASS=admin@123 \
+  -e RABBITMQ_DEFAULT_PASS='<自行设定一个强口令>' \
   rabbitmq:4.3.2-management
 ```
 # kafka 4.3.1
@@ -217,7 +217,7 @@ spring:
 # 目前全部网页控制台访问链接
 RabbitMQ 消息管理后台
 地址：http://127.0.0.1:15672
-登录账号：admin / admin@123
+登录账号：admin / <启动时用 RABBITMQ_DEFAULT_PASS 设定的口令>
 SeaweedFS Master 集群元数据面板
 地址：http://127.0.0.1:9333
 SeaweedFS Filer 文件可视化管理面板（文件夹式操作文件）

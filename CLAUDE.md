@@ -7,10 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 mvn -o -DskipTests compile        # 快速编译（离线可用，5 个模块）
 mvn -o -DskipTests package        # 打包（仅 qsx-admin 产出可执行 fat jar）
-mvn test                          # 全量测试（230 例；仅 qsx-admin 有测试）
+mvn -o clean test                 # 全量测试（248 例；仅 qsx-admin 有测试）
 # 报 "Unresolved compilation problems" 但 compile 明明通过？先 mvn clean：
 # IDE 的编译器会往 target/classes 写产物，使 Maven 的增量检查跳过 javac，
 # 于是语法错误的中间态只在测试期以 java.lang.Error 的形式暴露。
+# 同类症状还有 NoClassDefFoundError / ClassNotFoundException 指向某个**没改过**的类——
+# 改了 record / 方法签名之后不做 clean 就构建，target/classes 里新旧产物混在一起即如此。
+# 结论：凡改动跨模块签名（如给 AuthUserAccount 加组件），一律走 clean。
 
 # 指定测试类时**必须**带 -Dsurefire.failIfNoSpecifiedTests=false：
 # 多模块 reactor 会让 -Dtest 同时作用于 5 个模块，其余 4 个模块没有匹配的测试类，
@@ -75,9 +78,20 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 | `qsx:auth:session:{userId}` | Hash{accessToken, refreshToken, firstLoginTs} | 7d 滑动 | 单端覆盖、按用户清理、绝对上限 |
 
 - 三个多键操作全部走 Lua 原子脚本（`qsx-security/src/main/resources/lua/auth_session_*.lua`，**脚本必须与 `AuthSessionServiceImpl` 同模块**，否则 `ClassPathResource` 加载失败），实现在 `qsx-security` 的 `security/session/AuthSessionServiceImpl`——**改会话行为先读这三个脚本的头部注释**，里面写明了每条约定的原因。
-- 请求链路：`TokenAuthenticationFilter`（Redis 反查 userId）→ `SecurityUserDetailsService.loadUserById`（实时查库 + 权限缓存）→ `isEnabled()` → 写入 SecurityContext。
+- 请求链路：`TokenAuthenticationFilter`（Redis 反查 userId）→ `SecurityUserDetailsService.loadUserById`（实时查库 + 权限缓存）→ `isEnabled()` → **强制首次改密闸** → 写入 SecurityContext。
 - 吊销入口统一为 `AuthSessionService.remove(userId)`，调用点共**六处**：登出、踢人、禁用、删除用户、改密、忘记密码重置。**新增任何涉及账号状态或凭据的用户生命周期变更，必须一并清理会话**，否则旧令牌仍然有效。
 - **fail 策略分级**：会话层 fail-closed（Redis 故障 = 拒绝认证，宁可不放行）；权限缓存 fail-open（Redis 异常降级查库）。两者边界不可混淆。
+
+### 强制首次改密（1037）
+
+`sys_user.must_change_password = 1` 的账号，登录后拿到的令牌**只能访问 `/auth/**`**，其余接口一律 `HTTP 200 + body 业务码 1037`。
+
+- **置 1 三处**：`sql/init.sql` 预置超管、Excel 导入落库、后台建号（`user:create`）——共同点是"口令由他人设定且对方已知"。**自注册不置 1**（用户自选口令），有反向用例锁定。
+- **置 0 一处**：`UserServiceImpl.updatePassword` 是改密与忘记密码重置的**唯一写库入口**，在那里一并置 0，一处覆盖双通道。必须显式传 `Boolean.FALSE`（NOT_NULL 字段策略下 null 不进 SET，标志就永远清不掉）。
+- **判定在 `TokenAuthenticationFilter`**，与 `isEnabled()` 同一处、每请求实时查库 ⇒ 天然即时、零额外开销、**不需要动三条会话 Lua、也不需要缓存失效**。刻意放在 `isEnabled()` 为真的分支内：放外层会让已禁用用户拿到 1037 而不是 401。
+- **豁免面是整个 `/auth/` 前缀，不是枚举清单**。过滤器对 `permitAll` 端点同样执行，只豁免改密/登出/`me` 的话，用户连"刷新令牌""发本人验证码走通道 B 改密""忘记密码重置"都被挡住——AT 一过期就永远拿不到新令牌，**密码再也改不了（死锁）**。前缀写法还让新增 `/auth` 端点自动豁免。
+- ⚠️ **绝不能用 `shouldNotFilter()` 实现豁免**：那会让过滤器对 `/auth/**` 整体失效，而 `/auth/me`、`/auth/logout`、`/auth/change-password`、`/auth/captcha`(CHANGE_PASSWORD 场景) 都依赖它填 SecurityContext。
+- 登录与刷新**都不因该标志失败**（不登录就没会话、没会话就改不了密），只是把标志回传给前端；被拦的请求在过滤器里补记一条审计（进不了 Controller，切面覆盖不到），身份只能从 `account` 取——那里刻意没写 SecurityContext。
 
 ### 邮箱验证码
 
@@ -130,14 +144,20 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 - **物理唯一索引 + 逻辑删除 ⇒ 判重必须含已删行**：`uk_role_code` / `uk_perm_code` 都是**不含 `deleted` 列**的唯一索引，而删除是逻辑删除——用 `BaseMapper.selectOne` 判重会被 `@TableLogic` 自动过滤掉已删行，于是「删除后用同一编码新建」通过校验、在 INSERT 时撞唯一索引返回 **500 而非 1010/1016**。角色与权限走 `countByCodeIncludeDeleted`（显式 SQL 绕开过滤）；用户则用「删除时把 `email` 改写为 `#deleted_<时间戳>`」释放索引。
 - **断言要打到机制层**：验证「吊销即时生效」这类能力时，除了断言 401，还要断言 Redis 键已消失——否则每请求查库的 `isEnabled()` 兜底会让漏实现的代码也通过测试。
 - **会话脚本仅支持单节点 Redis**（无 hash tag，上集群会 CROSSSLOT）；Redis 不得改用 `allkeys-lru` 等淘汰策略（会话键被淘汰 = AT 无法吊销）。
+- **MyBatis-Plus 的日志实现不得改回 `StdOutImpl`**：它绕过日志框架直写 stdout，把带参数的 SQL 原文（邮箱、BCrypt 哈希、导入默认口令）持续打出来，而调 `logging.level` 对它**完全无效**。当前是 `Slf4jImpl` + `com.qsx: info`；要看 SQL 时加 `logging.level.com.qsx.mapper: debug`。
+- **手写的批量 INSERT 列清单必须与实体同步**：`UserMapper.insertBatch` 是 `@Insert` + `<foreach>` 的显式列清单，给 `User` 加字段时漏加该列**不会报错**（取 DB 默认值），属静默失效。同类：给端口 record（如 `AuthUserAccount`）加组件后，别忘同步唯一构造点 `AuthUserRepositoryImpl.toAccount` 与 `UserVO` 的两个 `from` 重载。
+- **生产形态的危险默认值靠两道互补的闸拦**：`application-prod.yml` 用**无默认值**的占位符（未提供即启动失败），`ProdSecurityGuard` 拦「提供了值、但值是仓库公开值」。改配置时两者都要过一遍。
 
 ## 测试
 
-`BaseIntegrationTest` 提供：`register`（**内部走真实发码链路**：调 `/auth/captcha` → 从 Redis 取码 → 带码注册，故各测试类的 `register(...)` 调用点无需关心验证码）/ `loginGetToken` / `loginGetAuth`（返回 `token`/`refreshToken`/`userId`/`email`）、`postJson` / `bearerHeader` / `uniqueEmail` / `adminToken()`（走真实 `assignRoles` 链路构造超管）。用例前后自动清理测试用户、测试角色（`test-` 前缀，含逻辑删除行）、操作日志表，并按前缀清单清空 Redis 的会话 / 权限缓存 / 验证码键。
+`BaseIntegrationTest` 提供：`register`（**内部走真实发码链路**：调 `/auth/captcha` → 从 Redis 取码 → 带码注册，故各测试类的 `register(...)` 调用点无需关心验证码）/ `loginGetToken` / `loginGetAuth` / `loginOnlyGetAuth`（账号已存在时用，不必白走一遍注册）、`postJson` / `bearerHeader` / `uniqueEmail` / `adminToken()`（由**预置超管经 HTTP 授权**构造超管）。用例前后自动清理测试用户、测试角色（`test-` 前缀，含逻辑删除行）、操作日志表，并按前缀清单清空 Redis 的会话 / 权限缓存 / 验证码键。
+
+> **测试会把预置超管复位**：每个用例前执行 `UPDATE sys_user SET password = <init.sql 那份 hash>, must_change_password = 0 WHERE email = 'admin@qsx.com'`。原因有二——强制改密闸之后，标志为 1 的超管会让 `grantAdminByPresetSuperAdmin` 拿到 1037，进而让经 `adminToken()` 扇出的 15 个测试类以同一条 `IllegalStateException` 集体转红；而本地手工体验过"首次登录强制改密"之后，库里的超管口令也不再是 `admin123`。
+> **代价**：跑一次测试会把你改过的超管口令还原成 `admin123`。只动这一行两列，不碰其它数据。
 
 `SessionLuaTest` 是唯一直连会话层的测试（不经 HTTP），覆盖原子性、并发双花、清理完整性——**改动 Lua 脚本后必须让它全绿**。
 
-**36 个接口 ↔ 测试类的对应关系见 `docs/test/项目测试报告.md` 的「四、结果汇总与覆盖矩阵」（分域明细见同目录 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道`）。** 新增接口须同步补测试：鉴权正反向、业务码矩阵、边界（401/403、越权、不存在）、以及机制层断言（该落库的落库、该清的键要清）。全部测试类：认证会话 `AuthControllerTest` / `AuthRefreshTest` / `AuthSessionTest` / `SecurityAccessTest` / `SessionLuaTest`，用户 `UserControllerTest` / `UserEdgeTest` / `UserKickTest` / `UserImportExportTest`，角色权限 `RoleTest` / `PermissionTest` / `RbacTest` / `RbacCacheTest` / `RbacCacheDisabledTest` / `AdminProtectionTest`，菜单日志 `MenuTest` / `LogTest`，邮箱验证码 `CaptchaTest` / `ForgotPasswordTest` / `ChangePasswordChannelTest` / `CaptchaMailSmokeTest`（Mailpit 未启动时 `assumeTrue` 跳过），改造回归 `RefactorRegressionTest`，全链路 `BusinessFlowTest`。
+**36 个接口 ↔ 测试类的对应关系见 `docs/test/项目测试报告.md` 的「四、结果汇总与覆盖矩阵」（分域明细见同目录 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道`）。** 新增接口须同步补测试：鉴权正反向、业务码矩阵、边界（401/403、越权、不存在）、以及机制层断言（该落库的落库、该清的键要清）。全部测试类：认证会话 `AuthControllerTest` / `AuthRefreshTest` / `AuthSessionTest` / `SecurityAccessTest` / `SessionLuaTest`，用户 `UserControllerTest` / `UserEdgeTest` / `UserKickTest` / `UserImportExportTest`，角色权限 `RoleTest` / `PermissionTest` / `RbacTest` / `RbacCacheTest` / `RbacCacheDisabledTest` / `AdminProtectionTest`，菜单日志 `MenuTest` / `LogTest`，邮箱验证码 `CaptchaTest` / `ForgotPasswordTest` / `ChangePasswordChannelTest` / `CaptchaMailSmokeTest`（Mailpit 未启动时 `assumeTrue` 跳过），强制改密 `MustChangePasswordTest`，配置守卫 `MailChainConfigTest` / `ProdSecurityGuardTest`（两者都不依赖外部设施，永不跳过），改造回归 `RefactorRegressionTest`，全链路 `BusinessFlowTest`。
 
 ## 文档索引
 

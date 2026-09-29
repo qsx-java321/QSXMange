@@ -29,7 +29,7 @@
 | --: | :--- | :--- |
 | 1 | `GET /api/users/import/template`（admin） | **HTTP 200** · `Content-Type: ...spreadsheetml.sheet` · 文件 ~3705 B · 头 `PK`（合法 xlsx） |
 | 2 | `POST /api/users/import`（multipart，上传手工构造的 2 行 xlsx） | **HTTP 200** · `{"code":200,"data":{"successCount":2,"errors":[]}}` |
-| 3 | 用默认口令登录导入的用户 | **HTTP 200** code 200（`qsx123456` + BCrypt 生效；nickname「导入用户一」入库） |
+| 3 | 用默认口令登录导入的用户 | **HTTP 200** code 200（默认口令 + BCrypt 生效；nickname「导入用户一」入库）。⚠️ **2026-09-29 更新**：登录本身仍是 200，但导入账号现已带 `must_change_password=1`，该令牌只能访问 `/auth/**`，调其它接口一律 body 1037 —— 须先走一次 `POST /auth/change-password` |
 | 4 | `GET /api/users/export`（admin） | **HTTP 200** · `Content-Type: ...spreadsheetml.sheet` · 文件 ~3917 B · 头 `PK`（合法 xlsx） |
 
 > 上传的 xlsx 为真实构造（表头 `邮箱/昵称/状态/角色编码` + 2 行数据；含 1 行 status=1 禁用），验证了「非单测生成」的真实二进制文件解析。
@@ -37,13 +37,16 @@
 ## 机制层
 
 - 导入失败整批回滚、成功行与角色绑定关系一致（Track A 直查 `sys_user` / `sys_user_role` 断言）。
-- 默认口令统一复用同一 BCrypt 哈希（大批量性能取舍）。
+- 默认口令统一复用同一 BCrypt 哈希（大批量性能取舍）；导入落库的账号一律 `must_change_password=1`，
+  由 `UserImportExportTest` 的直查断言固定（它同时是 `UserMapper.insertBatch` 手写列清单的守卫）。
 
 ## 发现的问题 / 观察项
 
-- 无新增缺陷。导出 `nickname` **未做公式注入转义**（`=HYPERLINK(...)` 开头会原样写出，见设计 05 §7 #5）；本轮未构造恶意昵称攻击，列为**既有已知缺口**待办。
+- 无新增缺陷。（原记的「导出公式注入」已**撤销**：2026-09-29 实测证伪，EasyExcel 4.0.3 + POI 5.2.5 写出的是 `t="inlineStr"` 字符串单元格，Excel 打开不执行——见 `docs/question-list/05` §二。）
 - 导入无权限时 403、角色不存在整批拒绝，均按设计拦截。
 
 ## 结论
 
 Excel 模板下载 / 批量导入（整批校验拒绝 + 默认口令落库 + 可登录）/ 条件导出三个接口在双轨下全部符合预期，真实二进制文件上传与下载解析均正常。
+
+> 失效提示（2026-09-29）：第 3 条的「可登录」现已附带条件——导入账号首次登录后必须先改密。

@@ -22,6 +22,9 @@ sys_user ──< sys_user_role >── sys_role ──< sys_role_permission >─
 预置数据（`sql/init.sql`，幂等 `INSERT IGNORE`）：6 个菜单 + 23 个按钮权限码 + `ADMIN` 角色
 （绑定全部菜单与权限）+ 超管账号 `admin@qsx.com / admin123`。
 
+> 该超管种子带 `must_change_password = 1`：首次登录后必须先改密才能访问 `/auth/**` 以外的
+> 接口（业务码 1037），见 [05](05-业务功能与保护矩阵.md) §8。`admin123` 是本地公开的**临时**口令。
+
 ## 2. 鉴权方式：权限码 + `@PreAuthorize`
 
 ```java
