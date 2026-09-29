@@ -283,19 +283,43 @@ class UserEdgeTest extends BaseIntegrationTest {
 
         LoginSession target = loginGetAuth(uniqueEmail("grant-admin-target"), "abc123");
 
-        // 1) 给自己绑 ADMIN——自助提权最直接的路径（1033 只看目标、1017 只管导入，都拦不住它）
-        assertThat(callAssignRoles(operator.token(), operator.userId(), (int) adminRoleId()))
+        // 1) 给他人绑 ADMIN → 闸 2 拦
+        assertThat(callAssignRoles(operator.token(), target.userId(), (int) adminRoleId()))
                 .as("非超管不得授予 ADMIN")
                 .isEqualTo(1034);
-        assertThat(roleRelCount(operator.userId())).as("仍是那个非 ADMIN 角色，且只有 1 条").isEqualTo(1);
-
-        // 2) 给他人绑 ADMIN 同样被拒
-        assertThat(callAssignRoles(operator.token(), target.userId(), (int) adminRoleId())).isEqualTo(1034);
         assertThat(roleRelCount(target.userId())).isZero();
 
-        // 3) 回归：同一个人授普通角色仍然放行（闸 2 只拦 ADMIN）
+        // 2) 回归：同一个人授普通角色仍然放行（闸 2 只拦 ADMIN）
         assertThat(callAssignRoles(operator.token(), target.userId(), (int) grantRole)).isEqualTo(200);
         assertThat(roleRelCount(target.userId())).isEqualTo(1);
+
+        // 3) 给自己绑 ADMIN 由**自保护**先拦（1022）——与 update/delete/kick 同序，
+        //    故调用自保护那一条的用例见 assignRoles_toSelf_rejected_1022
+        assertThat(callAssignRoles(operator.token(), operator.userId(), (int) adminRoleId())).isEqualTo(1022);
+        assertThat(roleRelCount(operator.userId())).as("仍是那个非 ADMIN 角色，且只有 1 条").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("[补测] 给自己改角色一律被拒（1022）：清空 / 新增 / 升超管都拦，防自锁与自我提权")
+    void assignRoles_toSelf_rejected_1022() throws Exception {
+        String admin = adminToken();
+        long roleId = roleId(createRole(admin, uniqueRoleCode()));
+        assignPermissions(admin, roleId, permIdByCode(PermissionConstants.USER_ASSIGN_ROLE));
+
+        // 让目标先持有该角色，从而具备 user:assign-role 权限（否则会被 @PreAuthorize 403 拦在前面）
+        LoginSession self = loginGetAuth(uniqueEmail("self-assign"), "abc123");
+        assertThat(callAssignRoles(admin, self.userId(), (int) roleId)).isEqualTo(200);
+        assertThat(roleRelCount(self.userId())).isEqualTo(1);
+
+        // 1) 清空自己的角色：管理端常规操作，一次点击即自锁（本闸要防的主路径）
+        assertThat(callAssignRoles(self.token(), self.userId())).isEqualTo(1022);
+        // 2) 给自己加角色：闸 2 只拦 ADMIN，拦不住"给自己补一个带 user:delete 的角色"这类自我提权
+        assertThat(callAssignRoles(self.token(), self.userId(), (int) roleId)).isEqualTo(1022);
+        // 3) 给自己升超管：被 1022 先拦，轮不到 1034
+        assertThat(callAssignRoles(self.token(), self.userId(), (int) adminRoleId())).isEqualTo(1022);
+
+        // 机制层：三次都被拒，关联行数原样（拦截发生在整表替换之前）
+        assertThat(roleRelCount(self.userId())).isEqualTo(1);
     }
 
     @Test

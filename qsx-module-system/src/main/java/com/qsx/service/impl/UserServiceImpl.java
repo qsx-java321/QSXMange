@@ -250,6 +250,21 @@ public class UserServiceImpl implements UserService {
         if (userMapper.selectById(userId) == null) {
             throw new BusinessException(ResultCode.USER_NOT_FOUND);
         }
+        // 自锁保护：不允许给自己改角色（与禁用自己/删除自己/踢自己同为 1022）。
+        // 管理端「清空角色」是常规操作，一次点击就可能把自己架空；而且非超管给自己加角色
+        // 还是一条自我提权路径（闸 2 只拦 ADMIN，拦不住"给自己补一个带 user:delete 的角色"）。
+        // 位置与 update/delete/kick 一致：存在性 → 自己 → 内置资产，
+        // 故错误码优先级为 1004 → 1022 → 1033 → 1034 → 1009。
+        //
+        // 无操作者上下文（程序内直调 service，如测试造数）时**跳过**本闸——没有"自己"可言；
+        // HTTP 路径必有操作者，真实流量始终受保护。注意这与闸 2 的取向刻意相反：
+        // 闸 2 面对"不知道操作者是谁"是 fail-closed（拒绝授予 ADMIN），
+        // 本闸面对同样情形是"不成立"（无人可比对），两者都是各自问题的正确答案。
+        // 操作者只取一次，下面的闸 2 复用同一个值。
+        Long operatorId = SecurityUtils.getCurrentUserIdOrNull();
+        if (operatorId != null && userId.equals(operatorId)) {
+            throw new BusinessException(ResultCode.CANNOT_OPERATE_SELF);
+        }
         // 闸：内置超管用户的角色绑定不可被任何操作者修改——与「不可禁用(1020)/不可强制登出(1021)/
         // 不可删除(1025)」对称，补上此前唯一零保护的生命周期入口。
         // 传空列表「清空角色」同样被覆盖：本闸在整表替换之前、与 roleIds 内容无关。
@@ -271,7 +286,7 @@ public class UserServiceImpl implements UserService {
         if (roleIds != null && !roleIds.isEmpty()) {
             Long adminRoleId = builtInAdminRoleId();
             if (adminRoleId != null && roleIds.contains(adminRoleId)) {
-                Long operatorId = SecurityUtils.getCurrentUserIdOrNull();
+                // 复用上面已取的 operatorId（同一个操作者，不重复取）
                 if (operatorId == null || !isBuiltInAdmin(operatorId)) {
                     throw new BusinessException(ResultCode.ADMIN_GRANT_REQUIRES_ADMIN);
                 }

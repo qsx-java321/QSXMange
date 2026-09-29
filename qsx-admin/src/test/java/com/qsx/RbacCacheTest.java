@@ -129,6 +129,31 @@ class RbacCacheTest extends BaseIntegrationTest {
         return new Holder(adminToken, userToken, userId, roleId, roleCode, permissionId, permissionCode);
     }
 
+    // ---------- 缓存坏值的自愈 ----------
+
+    @Test
+    void corruptCacheValue_isDeletedAndRebuiltOnNextRequest() throws Exception {
+        String email = uniqueEmail("cache-corrupt");
+        String userToken = registerAndLoginGetToken(email, "abc123");
+        Long userId = userMapper.selectOne(
+                new LambdaQueryWrapper<User>().eq(User::getEmail, email)).getId();
+        String key = cacheKey(userId);
+
+        // 把缓存值写坏（模拟灰度升级改了 PermissionCacheData 结构 / 被外部工具写坏）
+        stringRedisTemplate.opsForValue().set(key, "{ 这不是合法 JSON");
+        assertThat(stringRedisTemplate.opsForValue().get(key)).isEqualTo("{ 这不是合法 JSON");
+
+        // 下一次请求：解析失败 → 降级查库 + **删除坏值**（自愈），业务不受影响
+        mockMvc.perform(get("/auth/me").header("Authorization", bearerHeader(userToken)))
+                .andExpect(status().isOk());
+
+        // 机制层：坏值已被替换成可解析的新值（而不是留在那里让每个请求重复解析失败 + 2 条 SQL）
+        String rebuilt = stringRedisTemplate.opsForValue().get(key);
+        assertThat(rebuilt).isNotEqualTo("{ 这不是合法 JSON");
+        assertThat(rebuilt).isNotNull();
+        assertThat(objectMapper.readTree(rebuilt).path("permissions").isArray()).isTrue();
+    }
+
     // ---------- 缓存回填与即时生效 ----------
 
     @Test
