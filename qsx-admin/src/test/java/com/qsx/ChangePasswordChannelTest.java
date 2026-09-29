@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.Locale;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -106,6 +108,37 @@ class ChangePasswordChannelTest extends BaseIntegrationTest {
                 "{\"captcha\":\"" + otherCode + "\",\"newPassword\":\"newpass123\"}");
 
         assertThat(businessCode(result)).isEqualTo(1028);
+    }
+
+    @Test
+    @DisplayName("通道 B：登录用小写、库中存混合大小写时仍能改密（回归：验证码键必须折叠大小写）")
+    void channelB_emailCaseMismatch_stillWorks() throws Exception {
+        // 前置：构造出真实的大小写差异——注册用混合大小写（库中原样保存），登录用全小写
+        String stored = uniqueEmail("cpb-Case");
+        String lower = stored.toLowerCase(Locale.ROOT);
+        assertThat(lower).as("前置：本用例必须真的存在大小写差异").isNotEqualTo(stored);
+
+        register(stored, "abc123");
+        // 库 collation 为 ci，小写邮箱照样登录成功；但 account.email() 仍是库中的混合大小写形态
+        LoginSession session = loginGetAuth(lower, "abc123");
+        assertThat(session.email()).as("库中保存的是注册时的原样大小写").isEqualTo(stored);
+
+        // 以小写邮箱发码（业务允许：sendCaptcha 用 equalsIgnoreCase 判定为本人）
+        String code = changePasswordCaptcha(lower, session.token());
+
+        // 机制层：键必须落在折叠后的形态上。修复前发码侧按"客户端原样"、校验侧按"库中原样"，
+        // 两端算出两个不同的键 ⇒ 同一张刚发出的码被判 1028
+        assertThat(stringRedisTemplate.hasKey(
+                CaptchaRedisKeys.code(CaptchaScene.CHANGE_PASSWORD, lower)))
+                .as("验证码键按大小写折叠后的形态落库")
+                .isTrue();
+
+        MvcResult result = changePassword(session.token(),
+                "{\"captcha\":\"" + code + "\",\"newPassword\":\"newpass123\"}");
+
+        assertThat(businessCode(result)).as("修复前此处为 1028").isEqualTo(200);
+        assertSessionsBurned(session);
+        assertThat(loginCode(lower, "newpass123")).isEqualTo(200);
     }
 
     // ---------- 辅助 ----------
