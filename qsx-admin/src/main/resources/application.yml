@@ -7,8 +7,11 @@ spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/QSXManager?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    username: root
-    password: "123456"
+    # 口令外部化（docs/question-list/01 #4）：默认值是本地 init.sql 的开发口令，
+    # 让「clone → 建库 → 起服务」开箱即用；**生产形态必须显式提供**——
+    # application-prod.yml 用的是**不带默认值**的占位符，解析不到即启动失败。
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:123456}
   data:
     redis:
       # 本地 Redis 容器（redis:7.4.9，无密码，见 docs/dev-env/组件依赖README.md）
@@ -48,7 +51,11 @@ mybatis-plus:
   type-aliases-package: com.qsx.domain.entity
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # 必须用 Slf4jImpl：StdOutImpl 会 **绕过日志框架**直接 System.out.println，
+    # 于是带参数的 SQL 原文（BCrypt 哈希、邮箱、导入默认口令）持续打到 stdout，
+    # 而改 logging.level 对它**完全无效**（docs/question-list/01 #4）。
+    # 需要看 SQL 时改 `logging.level.com.qsx.mapper: debug`，不要改回 StdOutImpl。
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
   global-config:
     banner: false
     db-config:
@@ -60,10 +67,20 @@ mybatis-plus:
 
 # Excel 导入自定义配置
 import:
-  # 批量导入用户的默认初始密码（上线前务必替换并妥善保管）
-  default-password: qsx123456
+  # 批量导入用户的**临时**初始密码：导入落库的账号一律被置 must_change_password=1，
+  # 首次登录即被强制改密（见 qsx.auth.session 上方的说明），故它只在「导入 → 首次登录」
+  # 这个短窗口内有效。但它毕竟是仓库里公开的值，生产形态必须显式提供
+  # （application-prod.yml 用不带默认值的占位符）。
+  default-password: ${IMPORT_DEFAULT_PASSWORD:qsx123456}
 
 # RBAC 权限缓存配置（Redis）
+#
+# 【强制首次改密】sys_user.must_change_password = 1 的账号，登录后拿到的令牌**只能访问
+# /auth/** 前缀**（登录 / 刷新 / 当前用户 / 登出 / 发码 / 忘记密码 / 改密），访问其它任何
+# 接口一律返回 body 业务码 1037。置 1 的三处：init.sql 预置超管、Excel 导入落库、后台建号
+# （user:create）；改密与忘记密码重置成功后自动置 0（唯一写库入口 UserServiceImpl#updatePassword）。
+# 判定在 TokenAuthenticationFilter 里、与「账号是否禁用」同一处、每请求实时查库，
+# 因此没有额外的 Redis 状态、也不改三条会话 Lua。
 qsx:
   rbac-cache:
     # 总开关：false 时退化为实时查库（降级/特殊环境用）
@@ -98,7 +115,10 @@ qsx:
       # 自首次登录起的会话绝对上限，轮换不重置，超限强制重新登录
       max-lifetime: 30d
 
-# 打印启动信息
+# 启动信息。
+# com.qsx 用 info 而非 debug：debug 会把每次请求的权限缓存命中、SQL 参数等全部打出来，
+# 其中含邮箱与口令哈希（docs/question-list/01 #4）。要看 SQL 时临时加
+# `logging.level.com.qsx.mapper: debug`。
 logging:
   level:
-    com.qsx: debug
+    com.qsx: info

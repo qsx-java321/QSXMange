@@ -11,6 +11,8 @@
 --     ② docker（推荐）：
 --        docker cp sql/init.sql mysql:/tmp/init.sql
 --        docker exec mysql sh -c "mysql --default-character-set=utf8mb4 -uroot -p123456 < /tmp/init.sql"
+--   注：上面命令行里的 -p123456 是**本地 Docker 开发库**的口令（见 docs/dev-env），
+--       生产形态的连接口令走环境变量 DB_PASSWORD，不写在这里。
 --   脚本自包含建库（CREATE DATABASE IF NOT EXISTS）并声明会话字符集（SET NAMES utf8mb4），
 --   与客户端 --default-character-set=utf8mb4 形成双保险，防止中文乱码。
 -- 变更历史：
@@ -257,7 +259,12 @@ VALUES ('ADMIN', '超级管理员', '系统内置超管，绑定全部权限', 0
 INSERT IGNORE INTO sys_role_permission (role_id, permission_id)
 SELECT (SELECT id FROM sys_role WHERE code = 'ADMIN'), id FROM sys_permission WHERE deleted = 0;
 
--- 5. 超级管理员账号（默认密码 admin123，可用 BCryptPasswordEncoder 对目标密码重新生成 hash 后替换）
+-- 5. 超级管理员账号
+--    口令是本地开发用的公开初始口令 admin123（hash 由 BCryptPasswordEncoder 生成）。
+--    must_change_password = 1：首次登录后**必须改密**才能访问 /auth/** 以外的接口
+--    （业务码 1037），改密成功即自动置 0 —— 这条是「公开口令」真正被收口的地方。
+--    ⚠️ 测试基类会在造数前把本行复位成「此处的 hash + 标志 0」，所以本地若手工改过
+--       超管口令，跑一次 `mvn test` 就会把它还原成 admin123。
 INSERT IGNORE INTO sys_user (email, password, nickname, status, deleted)
 VALUES ('admin@qsx.com', '$2a$10$3KuSUz6n6SzyMXi535r3Su/qP6AaVWdCvjNUx0FWVFj4DS4tca3By', '超级管理员', 0, 0);
 
