@@ -85,6 +85,32 @@ class LogTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("超长 URL 仍被记录（截断到列宽），不会整条审计丢失")
+    void longUrl_truncatedButRecorded() throws Exception {
+        String token = adminToken();
+        cleanLogs();
+        // 在 URL 后面挂一长串查询参数：不截断的话 MySQL 会以 1406 拒绝整行写入，
+        // 异常被 record() 的 catch 吞掉 ⇒ 这次请求在审计里彻底消失，
+        // 等于给了"靠长参数让自己不留痕"的规避手段（docs/question-list/01 #23）
+        //
+        // 注意必须把查询串**写进 URL**（而不是用 .param()）：MockMvc 的 param() 只填参数表，
+        // request.getQueryString() 仍为 null，而切面记录的正是 uri + "?" + queryString
+        String longKeyword = "x".repeat(400);
+
+        mockMvc.perform(get("/api/users?email=" + longKeyword)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk());
+
+        OperationLog log = awaitAnyMatch(l ->
+                l.getUrl() != null && l.getUrl().startsWith("/api/users?email=x"));
+        assertThat(log.getUrl())
+                .as("截断到 url 列宽（VARCHAR(255)），保住「这次请求发生过」这一底线")
+                .hasSize(255);
+        assertThat(log.getUrl()).startsWith("/api/users?email=");
+        assertThat(log.getSuccess()).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("业务失败（登录密码错误1002）被记录为失败日志")
     void business_failure_recorded() throws Exception {
         cleanLogs();

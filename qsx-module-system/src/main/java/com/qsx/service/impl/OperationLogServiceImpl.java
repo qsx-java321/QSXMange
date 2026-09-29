@@ -52,18 +52,40 @@ public class OperationLogServiceImpl implements OperationLogService, AccessLogRe
         }
     }
 
+    /** 审计列宽（与 sql/init.sql 的列定义一致，超长会被 MySQL 以 1406 拒绝） */
+    private static final int URL_MAX = 255;
+    private static final int ERROR_MSG_MAX = 500;
+
     /** 只做字段搬运；id 由数据库自增、createTime 由 MyBatis-Plus 自动填充 */
     private static OperationLog toEntity(AccessLogCommand command) {
         OperationLog log = new OperationLog();
         log.setUserId(command.getUserId());
         log.setUsername(command.getUsername());
         log.setMethod(command.getMethod());
-        log.setUrl(command.getUrl());
+        log.setUrl(truncate(command.getUrl(), URL_MAX, "url"));
         log.setHttpStatus(command.getHttpStatus());
         log.setSuccess(command.getSuccess());
-        log.setErrorMsg(command.getErrorMsg());
+        log.setErrorMsg(truncate(command.getErrorMsg(), ERROR_MSG_MAX, "error_msg"));
         log.setCostMs(command.getCostMs());
         return log;
+    }
+
+    /**
+     * 截断到列宽。
+     *
+     * <p>不截断的后果不是"少记一段文字"，而是**整条审计被丢弃**：MySQL 在 STRICT 模式下
+     * 对超长写入直接抛 1406，异常被 {@link #record} 的 catch 吞掉，只剩一行 ERROR 日志——
+     * 于是任何人在 URL 后面挂一长串查询参数就能让自己的请求不留审计痕迹
+     * （切面写的就是 {@code uri + "?" + queryString} 整串，而查询 DTO 对关键字长度没有约束）。
+     * 截断会牺牲尾部信息，但保住了"这次请求发生过"这一审计底线。
+     * 见 docs/question-list/01 #23。
+     */
+    private static String truncate(String value, int max, String field) {
+        if (value == null || value.length() <= max) {
+            return value;
+        }
+        log.warn("审计字段超长已截断: field={}, len={}, max={}", field, value.length(), max);
+        return value.substring(0, max);
     }
 
     @Override
