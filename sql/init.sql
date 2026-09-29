@@ -20,6 +20,14 @@
 --   v1.5  操作日志：sys_operation_log + 日志菜单/按钮权限
 --   v1.6  Excel 批量导入导出权限：user:import / user:export
 --   v1.7  会话管理（refresh token）：user:kick 强制登出权限
+--   v1.8  强制首次改密：sys_user.must_change_password（预置超管种子置 1）
+--
+-- 已有环境升级（本脚本是 DROP 重建，不能对既有库重跑）：
+--   ALTER TABLE sys_user
+--     ADD COLUMN must_change_password TINYINT NOT NULL DEFAULT 0
+--     COMMENT '必须修改密码：0-否，1-是（为1时除 /auth/** 外一律拒绝，业务码 1037）'
+--     AFTER status;
+--   UPDATE sys_user SET must_change_password = 1 WHERE email = 'admin@qsx.com';
 -- =============================================
 
 -- 建库（幂等，统一 utf8mb4 字符集与排序规则）
@@ -42,6 +50,7 @@ CREATE TABLE sys_user (
     password    VARCHAR(128) NOT NULL COMMENT '密码（BCrypt加密）',
     nickname    VARCHAR(50)           DEFAULT NULL COMMENT '昵称',
     status      TINYINT      NOT NULL DEFAULT 0 COMMENT '状态：0-正常，1-禁用',
+    must_change_password TINYINT NOT NULL DEFAULT 0 COMMENT '必须修改密码：0-否，1-是（为1时除 /auth/** 外一律拒绝，业务码 1037）',
     create_time DATETIME              DEFAULT NULL COMMENT '创建时间',
     update_time DATETIME              DEFAULT NULL COMMENT '更新时间',
     deleted     TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0-正常，1-已删除',
@@ -265,8 +274,10 @@ SELECT (SELECT id FROM sys_role WHERE code = 'ADMIN'), id FROM sys_permission WH
 --    （业务码 1037），改密成功即自动置 0 —— 这条是「公开口令」真正被收口的地方。
 --    ⚠️ 测试基类会在造数前把本行复位成「此处的 hash + 标志 0」，所以本地若手工改过
 --       超管口令，跑一次 `mvn test` 就会把它还原成 admin123。
-INSERT IGNORE INTO sys_user (email, password, nickname, status, deleted)
-VALUES ('admin@qsx.com', '$2a$10$3KuSUz6n6SzyMXi535r3Su/qP6AaVWdCvjNUx0FWVFj4DS4tca3By', '超级管理员', 0, 0);
+--    注意列清单里**必须有** must_change_password：漏写会取 DB 默认 0，
+--    而 INSERT IGNORE 对「行已存在」又直接跳过，两种情形都不报错。
+INSERT IGNORE INTO sys_user (email, password, nickname, status, must_change_password, deleted)
+VALUES ('admin@qsx.com', '$2a$10$3KuSUz6n6SzyMXi535r3Su/qP6AaVWdCvjNUx0FWVFj4DS4tca3By', '超级管理员', 0, 1, 0);
 
 -- 6. 超级管理员绑定 ADMIN 角色
 INSERT IGNORE INTO sys_user_role (user_id, role_id)

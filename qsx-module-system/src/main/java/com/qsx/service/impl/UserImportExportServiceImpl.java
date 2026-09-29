@@ -175,6 +175,12 @@ public class UserImportExportServiceImpl implements UserImportExportService {
             user.setNickname(StringUtils.hasText(row.getNickname())
                     ? row.getNickname().trim() : UserConstants.defaultNickname(row.getEmail().trim()));
             user.setStatus(resolveStatus(row.getStatus()));
+            // 整批共用同一个公开口令（defaultPassword），必须强制首次改密——否则等于批量签发
+            // 已知口令的账号（docs/question-list/01 #4）。
+            // 注意本值必须由 UserMapper.insertBatch 的列清单承载：那是一条手写的
+            // INSERT ... VALUES <foreach>，列清单里没有这一列就会**静默取 DB 默认 0**，
+            // 整条闸对导入账号永不生效且零报错。
+            user.setMustChangePassword(Boolean.TRUE);
             users.add(user);
         }
         userMapper.insertBatch(users);

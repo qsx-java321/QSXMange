@@ -16,12 +16,20 @@ import java.util.List;
 public interface UserMapper extends BaseMapper<User> {
 
     /**
-     * 批量插入（Excel 导入用），create_time/update_time 由数据库 NOW() 填充，deleted 固定 0
+     * 批量插入（Excel 导入用），create_time/update_time 由数据库 NOW() 填充，deleted 固定 0。
+     *
+     * <p><b>列清单是显式枚举的，不是 {@code BaseMapper} 生成的</b>：给 {@code User} 加字段时
+     * 必须同步加进这里，否则该字段会被**静默丢弃**（走 DB 默认值，不报错）。导入用户的
+     * {@code must_change_password} 就依赖本行——漏改的后果是"导入账号不被强制改密"，
+     * 一个不会有任何报错的安全缺口。
+     *
+     * <p>取值走 {@code #{item.mustChangePassword}} 而不是写死 1：让实体始终是唯一真源。
+     * 该列 NOT NULL 且无默认值之外的兜底，漏赋值会以 1048 直接失败——这是**良性失败**。
      */
     @Insert("<script>" +
-            "INSERT INTO sys_user(email, password, nickname, status, create_time, update_time, deleted) VALUES " +
+            "INSERT INTO sys_user(email, password, nickname, status, must_change_password, create_time, update_time, deleted) VALUES " +
             "<foreach collection='list' item='item' separator=','>" +
-            "(#{item.email}, #{item.password}, #{item.nickname}, #{item.status}, NOW(), NOW(), 0)" +
+            "(#{item.email}, #{item.password}, #{item.nickname}, #{item.status}, #{item.mustChangePassword}, NOW(), NOW(), 0)" +
             "</foreach>" +
             "</script>")
     int insertBatch(@Param("list") List<User> list);

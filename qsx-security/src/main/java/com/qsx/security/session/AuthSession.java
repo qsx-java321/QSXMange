@@ -4,8 +4,7 @@ package com.qsx.security.session;
  * 一次签发的会话凭证（明文令牌）。
  *
  * **仅在服务端内部传递**，绝不落日志：toString 已对令牌脱敏，
- * 防止有人无意间 log.info("{}", session) 把可用令牌写进日志文件
- * （本项目 logging.level.com.qsx 已开到 debug）。
+ * 防止有人无意间 log.info("{}", session) 把可用令牌写进日志文件。
  */
 public record AuthSession(Long userId, String accessToken, String refreshToken) {
 

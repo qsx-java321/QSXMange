@@ -20,7 +20,8 @@ public record AuthUserAccount(
         String password,
         Integer status,
         LocalDateTime createTime,
-        LocalDateTime updateTime) {
+        LocalDateTime updateTime,
+        boolean mustChangePassword) {
 
     /**
      * status: 0-正常，1-禁用
@@ -30,5 +31,18 @@ public record AuthUserAccount(
      */
     public boolean enabled() {
         return status != null && status == 0;
+    }
+
+    /**
+     * 是否仍在使用初始口令（true = 必须先改密）。
+     *
+     * <p>刻意**不**参与 {@link #enabled()} 的判定，也不进 {@code SecurityUser#isEnabled()}：
+     * 登录链路上 {@code isEnabled()} 为假会被 {@code DaoAuthenticationProvider} 抛成
+     * {@code DisabledException} → 1003（账号禁用），而"必须先改密"的账号**恰恰需要能登录**
+     * ——不登录就没有会话，没有会话就改不了密码。判定放在认证过滤器里按请求执行，
+     * 且对 {@code /auth/**} 整体豁免。
+     */
+    public boolean mustChangePassword() {
+        return mustChangePassword;
     }
 }

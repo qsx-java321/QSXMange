@@ -156,6 +156,9 @@ public class AuthServiceImpl implements AuthService {
         vo.setNickname(account.nickname());
         vo.setRoles(data.getRoles());
         vo.setPermissions(data.getPermissions());
+        // 登录本身**不**因该标志而失败：不登录就没有会话，没有会话就改不了密码。
+        // 拦截发生在 TokenAuthenticationFilter，对 /auth/** 整体豁免
+        vo.setMustChangePassword(account.mustChangePassword());
         return vo;
     }
 
@@ -194,6 +197,8 @@ public class AuthServiceImpl implements AuthService {
         RefreshVO vo = new RefreshVO();
         vo.setToken(session.accessToken());
         vo.setRefreshToken(session.refreshToken());
+        // 上面第 2 步已经把整行取出来了，回传标志零额外开销；刷新本身**不**因该标志失败
+        vo.setMustChangePassword(Boolean.TRUE.equals(user.getMustChangePassword()));
         return vo;
     }
 

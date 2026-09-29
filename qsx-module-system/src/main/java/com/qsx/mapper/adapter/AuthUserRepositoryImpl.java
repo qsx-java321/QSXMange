@@ -43,6 +43,9 @@ public class AuthUserRepositoryImpl implements AuthUserRepository {
                 user.getPassword(),
                 user.getStatus(),
                 user.getCreateTime(),
-                user.getUpdateTime());
+                user.getUpdateTime(),
+                // 库中为 TINYINT，历史行可能为 null（本列 NOT NULL DEFAULT 0，但手工 ALTER
+                // 的库不保证），统一按 false 处理，避免拆箱 NPE
+                Boolean.TRUE.equals(user.getMustChangePassword()));
     }
 }

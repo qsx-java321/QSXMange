@@ -162,6 +162,8 @@ public class UserServiceImpl implements UserService {
         user.setNickname(StringUtils.hasText(request.getNickname())
                 ? request.getNickname() : UserConstants.defaultNickname(request.getEmail()));
         user.setStatus(request.getStatus() == null ? 0 : request.getStatus());
+        // 后台建号的口令是管理员设定的，对管理员而言是已知口令 ⇒ 与导入同性质，强制首次改密
+        user.setMustChangePassword(Boolean.TRUE);
         userMapper.insert(user);
         return UserVO.from(user);
     }
@@ -356,6 +358,11 @@ public class UserServiceImpl implements UserService {
         User user = new User();
         user.setId(id);
         user.setPassword(encodedPassword);
+        // 改密即解除"必须先改密"：这里是**改密与忘记密码重置的唯一写库入口**
+        //（AuthServiceImpl 的两个通道都调它），所以一处赋值覆盖双通道。
+        // 必须显式传 FALSE 而非留 null：MyBatis-Plus 默认 NOT_NULL 字段策略会把 null
+        // 排除在 SET 子句之外，标志将永远清不掉。与 password 同一条 UPDATE，无中间态。
+        user.setMustChangePassword(Boolean.FALSE);
         userMapper.updateById(user);
     }
 }
