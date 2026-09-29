@@ -5,6 +5,7 @@ import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.read.listener.ReadListener;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.qsx.common.constant.RoleConstants;
+import com.qsx.common.constant.UserConstants;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.ResultCode;
 import com.qsx.domain.entity.Role;
@@ -171,7 +172,8 @@ public class UserImportExportServiceImpl implements UserImportExportService {
             User user = new User();
             user.setEmail(row.getEmail().trim());
             user.setPassword(encodedPassword);
-            user.setNickname(StringUtils.hasText(row.getNickname()) ? row.getNickname().trim() : row.getEmail().trim());
+            user.setNickname(StringUtils.hasText(row.getNickname())
+                    ? row.getNickname().trim() : UserConstants.defaultNickname(row.getEmail().trim()));
             user.setStatus(resolveStatus(row.getStatus()));
             users.add(user);
         }
@@ -278,6 +280,11 @@ public class UserImportExportServiceImpl implements UserImportExportService {
             errors.add("第 " + row.getRowNum() + " 行：邮箱不能为空");
         } else if (!email.matches(EMAIL_REGEX)) {
             errors.add("第 " + row.getRowNum() + " 行：邮箱格式不正确");
+        } else if (email.length() > UserConstants.EMAIL_MAX) {
+            // 与三个写路径 DTO 的 @Size 同一上限：导入是绕过 DTO 的第二条写路径。
+            // 少了这道校验，超长邮箱会拖到 INSERT 阶段才撞列宽（1406 → 整批 500），
+            // 而不是给出可定位到行的错误；EMAIL_REGEX 本身不限制总长度
+            errors.add("第 " + row.getRowNum() + " 行：邮箱长度不能超过" + UserConstants.EMAIL_MAX);
         } else if (existingEmails.contains(email)) {
             errors.add("第 " + row.getRowNum() + " 行：邮箱已存在：" + email);
         } else if (!fileEmails.add(email)) {

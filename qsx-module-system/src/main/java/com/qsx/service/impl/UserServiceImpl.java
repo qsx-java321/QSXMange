@@ -3,6 +3,7 @@ package com.qsx.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.qsx.common.constant.RoleConstants;
+import com.qsx.common.constant.UserConstants;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.framework.result.PageResult;
 import com.qsx.common.result.ResultCode;
@@ -151,7 +152,8 @@ public class UserServiceImpl implements UserService {
         User user = new User();
         user.setEmail(request.getEmail());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
-        user.setNickname(StringUtils.hasText(request.getNickname()) ? request.getNickname() : request.getEmail());
+        user.setNickname(StringUtils.hasText(request.getNickname())
+                ? request.getNickname() : UserConstants.defaultNickname(request.getEmail()));
         user.setStatus(request.getStatus() == null ? 0 : request.getStatus());
         userMapper.insert(user);
         return UserVO.from(user);

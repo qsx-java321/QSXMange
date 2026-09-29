@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import com.qsx.common.constant.UserConstants;
 import lombok.Data;
 
 /**
@@ -16,6 +17,9 @@ public class UserUpdateRequest {
 
     @NotBlank(message = "邮箱不能为空")
     @Email(message = "邮箱格式不正确")
+    // 上限与「删除时改写邮箱的后缀」耦合，取值理由见 UserConstants.EMAIL_MAX；
+    // 消息用常量拼接（编译期常量表达式），避免改了上限却忘了改文案
+    @Size(max = UserConstants.EMAIL_MAX, message = "邮箱长度不能超过" + UserConstants.EMAIL_MAX)
     private String email;
 
     @Size(max = 50, message = "昵称长度不能超过50")

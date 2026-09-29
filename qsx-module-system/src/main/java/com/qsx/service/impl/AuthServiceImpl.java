@@ -1,6 +1,7 @@
 package com.qsx.service.impl;
 
 import com.qsx.common.constant.CaptchaScene;
+import com.qsx.common.constant.UserConstants;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.ResultCode;
 import com.qsx.domain.entity.User;
@@ -119,7 +120,8 @@ public class AuthServiceImpl implements AuthService {
         User user = new User();
         user.setEmail(request.getEmail());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
-        user.setNickname(StringUtils.hasText(request.getNickname()) ? request.getNickname() : request.getEmail());
+        user.setNickname(StringUtils.hasText(request.getNickname())
+                ? request.getNickname() : UserConstants.defaultNickname(request.getEmail()));
         user.setStatus(0); // 默认正常
         userService.save(user);
     }

@@ -41,6 +41,65 @@ class AuthControllerTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("注册邮箱超长：400（而非 500），且不落库")
+    void register_emailTooLong_rejectedAs400() throws Exception {
+        // 101 字符 = EMAIL_MAX + 1。@Email 只限制「本地部分 ≤64、域名标签 ≤63」而不限总长度
+        // （Hibernate Validator 实测可放行 260 字符的地址），所以超长地址靠加长域名构造，
+        // 拦它的只有 DTO 上的 @Size；没有它就会一路走到 INSERT 撞 VARCHAR(128)，
+        // 以 1406 → 500 收场（详见 docs/question-list/01 #19）
+        String email = longEmail(101);
+        assertThat(email).hasSize(101);
+
+        MvcResult result = register(email, "abc123");
+
+        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(json.path("code").asInt()).as("参数校验失败应是 400").isEqualTo(400);
+        assertThat(json.path("message").asText()).contains("邮箱长度");
+        assertThat(userMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User>()
+                        .eq(User::getEmail, email))).isNull();
+    }
+
+    @Test
+    @DisplayName("注册 60 字符邮箱且昵称留空：昵称按列宽截断，注册成功（历史 500 场景）")
+    void register_blankNickname_longEmail_truncatesNickname() throws Exception {
+        // 昵称留空时默认取邮箱，而 nickname 列只有 50 字符——直接写整串会撞列宽变 500，
+        // 且注册是匿名接口，任何访客都能用长邮箱把接口打成 500
+        String email = longEmail(60);
+        assertThat(email).hasSize(60);
+
+        MvcResult result = register(email, "abc123");
+
+        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(json.path("code").asInt()).as("昵称必须截断到列宽，而不是 500").isEqualTo(200);
+
+        User user = userMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User>()
+                        .eq(User::getEmail, email));
+        assertThat(user).isNotNull();
+        assertThat(user.getNickname()).hasSize(50).isEqualTo(email.substring(0, 50));
+    }
+
+    /**
+     * 构造总长为 {@code length} 且能通过 {@code @Email} 的邮箱。
+     *
+     * <p>@Email 的约束是「本地部分 ≤64、每个域名标签 ≤63」，对**总长度没有上限**
+     * （实测可放行 260 字符的地址），所以长邮箱只能靠加长域名构造。若把长地址写成
+     * "a×92@test.com"，先撞的是「本地部分 ≤64」而报格式错误，测不到总长度约束。
+     */
+    private static String longEmail(int length) {
+        String domain = "test.com";
+        int localLen = Math.min(64, length - domain.length() - 1);
+        int padding = length - localLen - 1 - domain.length();
+        assertThat(localLen).as("总长至少要能容纳 1 位本地部分 + @ + 域名").isPositive();
+        assertThat(padding).as("余量应为域名标签长度，不应为负").isNotNegative();
+        String domainFull = padding == 0 ? domain : "b".repeat(padding - 1) + "." + domain;
+        String email = "a".repeat(localLen) + "@" + domainFull;
+        assertThat(email).as("构造结果长度必须与请求一致").hasSize(length);
+        return email;
+    }
+
+    @Test
     @DisplayName("重复注册被拦截")
     void register_duplicateEmail() throws Exception {
         String email = uniqueEmail("reg-dup");

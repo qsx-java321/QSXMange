@@ -124,6 +124,32 @@ class UserImportExportTest extends BaseIntegrationTest {
     }
 
     @Test
+    void importUsers_emailTooLong_shouldRejectAll() throws Exception {
+        // 导入是绕过 DTO 校验的第二条写路径：EMAIL_REGEX 只校验格式、不限总长度，
+        // 因此必须在 validateRow 里独立拦一道，与 DTO 的 @Size 保持同一上限。
+        // 注意这道闸不是"修 500"（120 字符仍塞得进 VARCHAR(128)，不拦反而会成功），
+        // 它拦的是**造出将来删不掉的账号**：逻辑删除要把邮箱改写成「原邮箱 + 22 字符后缀」，
+        // 超过 106 字符的邮箱会在改写时溢出 → DELETE 永远 500（见 docs/question-list/01 #19）
+        String token = adminToken();
+        String longEmail = "e".repeat(111) + "@test.com";   // 120 字符
+        String okEmail = uniqueEmail("imp-ok2");
+        MockMultipartFile file = excelFile(List.of(
+                row(longEmail, "超长邮箱", "0", ""),
+                row(okEmail, "合法行", "0", "")));
+
+        mockMvc.perform(multipart("/api/users/import")
+                        .file(file)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1017))
+                .andExpect(jsonPath("$.data.errors.length()").value(1))
+                .andExpect(jsonPath("$.data.errors[0]").value(containsString("第 2 行")))
+                .andExpect(jsonPath("$.data.errors[0]").value(containsString("邮箱长度")));
+
+        assertNull(userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getEmail, okEmail)));
+    }
+
+    @Test
     void importUsers_lowercaseAdminCode_shouldAlsoReject() throws Exception {
         String token = adminToken();
         String email = uniqueEmail("imp-admin-lc");

@@ -1,6 +1,7 @@
 package com.qsx;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -28,6 +29,39 @@ class UserControllerTest extends BaseIntegrationTest {
                         .content("{\"email\":\"" + email + "\",\"password\":\"" + password + "\"" + statusJson + "}"))
                 .andExpect(status().isOk())
                 .andReturn();
+    }
+
+    /**
+     * 清理本类构造的长邮箱用户。
+     *
+     * <p>长邮箱的形态是 {@code a×64@b×N.test.com}——**不匹配基类清理用的
+     * {@code email LIKE '%@test.com%'}` 模式**（域名里多插了一段标签，"{@code @test.com}" 不再相邻），
+     * 因此不会被自动清理。漏了这一步会跨用例残留，表现为下次建号莫名返回 1001。
+     * 删除改写后的形态（{@code 原邮箱 + #deleted_时间戳}）同样要清。
+     */
+    @AfterEach
+    void cleanLongEmailRows() {
+        jdbcTemplate.update("DELETE FROM sys_user WHERE email = ? OR email LIKE ?",
+                longEmail(100), longEmail(100) + "#deleted_%");
+    }
+
+    /**
+     * 构造总长为 {@code length} 且能通过 {@code @Email} 的邮箱。
+     *
+     * <p>@Email 的约束是「本地部分 ≤64、每个域名标签 ≤63」，对**总长度没有上限**
+     * （实测可放行 260 字符的地址），所以长邮箱只能靠加长域名构造。若写成 "d×91@test.com"，
+     * 先撞的是「本地部分 ≤64」而报格式错误，测不到总长度约束。
+     */
+    private static String longEmail(int length) {
+        String domain = "test.com";
+        int localLen = Math.min(64, length - domain.length() - 1);
+        int padding = length - localLen - 1 - domain.length();
+        assertThat(localLen).as("总长至少要能容纳 1 位本地部分 + @ + 域名").isPositive();
+        assertThat(padding).as("余量应为域名标签长度，不应为负").isNotNegative();
+        String domainFull = padding == 0 ? domain : "b".repeat(padding - 1) + "." + domain;
+        String email = "a".repeat(localLen) + "@" + domainFull;
+        assertThat(email).as("构造结果长度必须与请求一致").hasSize(length);
+        return email;
     }
 
     // ---------- 分页查询 ----------
@@ -306,6 +340,43 @@ class UserControllerTest extends BaseIntegrationTest {
         for (JsonNode record : pageJson.path("data").path("records")) {
             assertThat(record.path("email").asText()).isNotEqualTo(email);
         }
+    }
+
+    @Test
+    @DisplayName("删除邮箱长度达上限(100)的用户：邮箱可被改写释放，删除成功并可再次使用")
+    void delete_maxLengthEmail_succeeds() throws Exception {
+        String token = adminToken();
+        // 100 字符 = UserConstants.EMAIL_MAX，是接口允许的最长邮箱。
+        // 删除要把邮箱改写成「原邮箱 + #deleted_ + 13 位毫秒」（共 22 字符）来释放唯一索引，
+        // 上限若取得过大（如最初文档里写的 110）就会在这一步撞 VARCHAR(128) → 500，
+        // 且该账号永远删不掉（历史缺陷，见 docs/question-list/01 #19）
+        String email = longEmail(100);
+        assertThat(email).hasSize(100);
+        MvcResult created = createUser(token, email, "abc123", 0);
+        assertThat(objectMapper.readTree(created.getResponse().getContentAsString())
+                .path("code").asInt()).as("前置：上限长度的邮箱必须能建号").isEqualTo(200);
+        long id = objectMapper.readTree(created.getResponse().getContentAsString())
+                .path("data").path("id").asLong();
+
+        MvcResult deleteResult = mockMvc.perform(delete("/api/users/" + id)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(deleteResult.getResponse().getContentAsString())
+                .path("code").asInt()).isEqualTo(200);
+
+        // 机制层：直查库看改写结果（@TableLogic 会过滤掉已删行，必须绕开 mapper）
+        String rewritten = jdbcTemplate.queryForObject(
+                "SELECT email FROM sys_user WHERE id = ?", String.class, id);
+        assertThat(rewritten).startsWith(email).contains("#deleted_");
+        assertThat(rewritten.length()).as("改写后的邮箱必须仍放得进 VARCHAR(128)").isLessThanOrEqualTo(128);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT deleted FROM sys_user WHERE id = ?", Integer.class, id)).isEqualTo(1);
+
+        // 邮箱已被释放：同一地址可再次建号（这正是改写后缀的目的）
+        MvcResult again = createUser(token, email, "abc123", 0);
+        assertThat(objectMapper.readTree(again.getResponse().getContentAsString())
+                .path("code").asInt()).isEqualTo(200);
     }
 
     @Test
