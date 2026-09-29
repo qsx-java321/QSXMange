@@ -80,13 +80,13 @@ class AdminProtectionTest extends BaseIntegrationTest {
     }
 
     /**
-     * 注册 → 登录 → 绑定 ADMIN 角色。与基类 adminToken() 同一条真实链路，
+     * 注册 → 登录 → 由预置超管经 HTTP 绑定 ADMIN 角色。与基类 adminToken() 同一条真实链路，
      * 额外带出 userId（用例需要把某个超管当作「被操作的目标」）。
      */
     private AdminSession newAdmin(String prefix) throws Exception {
         String email = uniqueEmail(prefix);
         LoginSession session = loginGetAuth(email, "abc123");
-        userService.assignRoles(session.userId(), List.of((long) adminRoleId()));
+        grantAdminByPresetSuperAdmin(session.userId());
         return new AdminSession(session.token(), session.userId(), email);
     }
 
@@ -431,13 +431,14 @@ class AdminProtectionTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("正向：给普通用户授予 ADMIN 仍然放行（本闸只看目标）")
+    @DisplayName("正向：超管给普通用户授予 ADMIN 放行（闸 2 只限制非超管操作者）")
     void assignRolesToNonAdminStillAllowed() throws Exception {
         String actor = adminToken();
         LoginSession target = loginGetAuth(uniqueEmail("plain-target"), "abc123");
 
-        // 本用例同时是一枚 tripwire：闸 2「授予 ADMIN 需操作者为超管」落地后，
-        // 这里的期望值必须从 200 改为 1034（见 docs/question-list/03 的错误码预分配）
+        // 闸 2（授予 ADMIN 需操作者本身是超管）已落地：本用例的操作者来自 adminToken()，
+        // 本身持有 ADMIN ⇒ 放行；**非超管操作者**的拦截用例见 UserEdgeTest
+        // grantAdmin_requiresAdminOperator_1034
         assertThat(callAssignRoles(actor, target.userId(), "[" + adminRoleId() + "]")).isEqualTo(200);
         assertThat(relationCountOf(target.userId())).isEqualTo(1);
     }

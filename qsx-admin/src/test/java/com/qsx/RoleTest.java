@@ -473,7 +473,7 @@ class RoleTest extends BaseIntegrationTest {
         String operator = adminToken();
         // 造一个持有 ADMIN 的用户并预热其权限缓存
         LoginSession superAdmin = loginGetAuth(uniqueEmail("warm"), "abc123");
-        userService.assignRoles(superAdmin.userId(), List.of(adminRoleId()));
+        grantAdminByPresetSuperAdmin(superAdmin.userId());
         mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(superAdmin.token())))
                 .andExpect(status().isOk());
         String cacheKey = PERM_CACHE_PREFIX + superAdmin.userId();

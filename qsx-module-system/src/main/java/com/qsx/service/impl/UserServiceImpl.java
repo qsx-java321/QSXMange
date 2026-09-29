@@ -98,6 +98,13 @@ public class UserServiceImpl implements UserService {
         return userMapper.existsRoleCode(userId, RoleConstants.ADMIN);
     }
 
+    /** 内置超管角色的 ID（按角色码查，不硬编码 id）；角色不存在时返回 null（此时也谈不上授予） */
+    private Long builtInAdminRoleId() {
+        Role admin = roleMapper.selectOne(
+                new LambdaQueryWrapper<Role>().eq(Role::getCode, RoleConstants.ADMIN));
+        return admin == null ? null : admin.getId();
+    }
+
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
     private final UserRoleMapper userRoleMapper;
@@ -254,6 +261,21 @@ public class UserServiceImpl implements UserService {
         // 已知残留：existsRoleCode 是快照读，与并发写之间存在 check-then-act 窗口（见 question-list #27），本批不处理。
         if (isBuiltInAdmin(userId)) {
             throw new BusinessException(ResultCode.ADMIN_USER_ROLE_IMMUTABLE);
+        }
+        // 闸 2：授予内置超管角色（ADMIN）必须由「本身持有 ADMIN」的操作者发起。
+        // 闸 1 只看**目标**（防架空既有超管），本闸补上**操作者**侧——否则持有 user:assign-role 的
+        // 普通管理员可以给自己或他人绑 ADMIN，等于自助提权（docs/question-list/01 #1 的残留面）。
+        // 无操作者上下文（程序内直调 service）一律按"不是超管"处理：该路径不可能来自匿名 HTTP
+        //（控制器需要 user:assign-role 鉴权），fail-closed 更安全，且不会把语义搅成 401。
+        // roleIds 为 null 表示"清空角色"，不含授予语义，故先判非空。
+        if (roleIds != null && !roleIds.isEmpty()) {
+            Long adminRoleId = builtInAdminRoleId();
+            if (adminRoleId != null && roleIds.contains(adminRoleId)) {
+                Long operatorId = SecurityUtils.getCurrentUserIdOrNull();
+                if (operatorId == null || !isBuiltInAdmin(operatorId)) {
+                    throw new BusinessException(ResultCode.ADMIN_GRANT_REQUIRES_ADMIN);
+                }
+            }
         }
         // 校验目标角色均存在
         if (roleIds != null) {

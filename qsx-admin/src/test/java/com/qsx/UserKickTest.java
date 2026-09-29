@@ -26,7 +26,7 @@ class UserKickTest extends BaseIntegrationTest {
     /** 注册并登录一个绑定了 ADMIN 角色的管理员 */
     private LoginSession adminAuth() throws Exception {
         LoginSession admin = loginGetAuth(uniqueEmail("kick-admin"), "abc123");
-        userService.assignRoles(admin.userId(), List.of(adminRoleId()));
+        grantAdminByPresetSuperAdmin(admin.userId());
         return admin;
     }
 

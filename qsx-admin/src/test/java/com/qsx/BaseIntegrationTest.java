@@ -31,6 +31,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -321,14 +322,48 @@ public abstract class BaseIntegrationTest {
 
     /**
      * 构造一个绑定 ADMIN 超管角色的用户并返回其 token
-     * （走真实业务链路 assignRoles，触发权限缓存失效，保证该用户权限即时生效）
+     * （走真实业务链路授权，触发权限缓存失效，保证该用户权限即时生效）
      */
     protected String adminToken() throws Exception {
         String email = uniqueEmail("admin");
         String token = registerAndLoginGetToken(email, "abc123");
         Long userId = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getEmail, email)).getId();
-        userService.assignRoles(userId, List.of(adminRoleId()));
+        grantAdminByPresetSuperAdmin(userId);
         return token;
+    }
+
+    /** 预置超管（init.sql 种子数据）——闸 2 之后，授予 ADMIN 只能由它发起 */
+    protected static final String PRESET_ADMIN_EMAIL = "admin@qsx.com";
+    protected static final String PRESET_ADMIN_PASSWORD = "admin123";
+
+    /** 预置超管的 token（走真实登录）；造超管与"授权类"用例都会用到 */
+    protected String presetAdminToken() throws Exception {
+        return loginGetToken(PRESET_ADMIN_EMAIL, PRESET_ADMIN_PASSWORD);
+    }
+
+    /**
+     * 由**预置超管**经 HTTP 把 ADMIN 角色授给目标用户。
+     *
+     * <p>闸 2（{@code ADMIN_GRANT_REQUIRES_ADMIN}）要求「授予 ADMIN 的操作者本身持有 ADMIN」，
+     * 因此测试不能再走「自注册 → 直调 service 自绑 ADMIN」那条老路（既没有操作者上下文，
+     * 也不符合闸 2 的语义）。改为与真实运维路径一致：预置超管登录 → HTTP 授权新用户。
+     *
+     * <p>前置：预置超管未被禁用、ADMIN 角色为启用态（{@code AdminProtectionTest} 会在用例后复位）。
+     * 密码取自 init.sql 种子（测试报告记录为 {@code admin@qsx.com / admin123}）。
+     */
+    protected void grantAdminByPresetSuperAdmin(Long userId) throws Exception {
+        String presetToken = presetAdminToken();
+        MvcResult result = mockMvc.perform(put("/api/users/" + userId + "/roles")
+                        .header("Authorization", bearerHeader(presetToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"roleIds\":[" + adminRoleId() + "]}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        int code = objectMapper.readTree(result.getResponse().getContentAsString()).path("code").asInt();
+        if (code != 200) {
+            throw new IllegalStateException("预置超管授权 ADMIN 失败（检查 ADMIN 角色是否被停用、"
+                    + "预置超管是否被改动）, userId=" + userId + ", code=" + code);
+        }
     }
 }

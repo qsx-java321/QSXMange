@@ -258,7 +258,7 @@ class UserEdgeTest extends BaseIntegrationTest {
     @DisplayName("[补测] 无 user:assign-role 权限的普通用户分配角色被拒（403）")
     void assignRoles_without_permission_forbidden() throws Exception {
         LoginSession admin = loginGetAuth(uniqueEmail("assign-forbid-admin"), "abc123");
-        userService.assignRoles(admin.userId(), List.of(adminRoleId()));
+        grantAdminByPresetSuperAdmin(admin.userId());
         // 目标用户（无 user:assign-role 权限）
         LoginSession normal = loginGetAuth(uniqueEmail("assign-forbid-user"), "abc123");
 
@@ -267,6 +267,44 @@ class UserEdgeTest extends BaseIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"roleIds\":[]}"))
                 .andExpect(status().isForbidden());
+    }
+
+    // ================== 3.5 闸 2：授予 ADMIN 需操作者本身是超管 ==================
+
+    @Test
+    @DisplayName("[补测] 非超管操作者（仅有 user:assign-role）授予 ADMIN 被拒 1034，且不落库")
+    void grantAdmin_requiresAdminOperator_1034() throws Exception {
+        // 造一个「只有 user:assign-role、本身不是超管」的操作者：
+        // 这正是闸 2 要防的角色——管理员把授权能力下放给某人，此人再给自己或他人升超管
+        long grantRole = roleId(createRole(presetAdminToken(), uniqueRoleCode()));
+        assignPermissions(presetAdminToken(), grantRole, permIdByCode(PermissionConstants.USER_ASSIGN_ROLE));
+        LoginSession operator = loginGetAuth(uniqueEmail("grant-admin-op"), "abc123");
+        assertThat(callAssignRoles(presetAdminToken(), operator.userId(), (int) grantRole)).isEqualTo(200);
+
+        LoginSession target = loginGetAuth(uniqueEmail("grant-admin-target"), "abc123");
+
+        // 1) 给自己绑 ADMIN——自助提权最直接的路径（1033 只看目标、1017 只管导入，都拦不住它）
+        assertThat(callAssignRoles(operator.token(), operator.userId(), (int) adminRoleId()))
+                .as("非超管不得授予 ADMIN")
+                .isEqualTo(1034);
+        assertThat(roleRelCount(operator.userId())).as("仍是那个非 ADMIN 角色，且只有 1 条").isEqualTo(1);
+
+        // 2) 给他人绑 ADMIN 同样被拒
+        assertThat(callAssignRoles(operator.token(), target.userId(), (int) adminRoleId())).isEqualTo(1034);
+        assertThat(roleRelCount(target.userId())).isZero();
+
+        // 3) 回归：同一个人授普通角色仍然放行（闸 2 只拦 ADMIN）
+        assertThat(callAssignRoles(operator.token(), target.userId(), (int) grantRole)).isEqualTo(200);
+        assertThat(roleRelCount(target.userId())).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("[补测] 预置超管（本身持有 ADMIN）授予 ADMIN 放行——闸 2 的正向对照")
+    void grantAdmin_byAdminOperator_allowed() throws Exception {
+        LoginSession target = loginGetAuth(uniqueEmail("grant-admin-ok"), "abc123");
+
+        assertThat(callAssignRoles(presetAdminToken(), target.userId(), (int) adminRoleId())).isEqualTo(200);
+        assertThat(roleRelCount(target.userId())).isEqualTo(1);
     }
 
     // ================== 4. 空角色分配 → 清空 + 权限即时回收 ==================
@@ -332,14 +370,14 @@ class UserEdgeTest extends BaseIntegrationTest {
     @Test
     @DisplayName("[补测] delete() 保护 ADMIN 用户：删除超管返回 1025（与 update=1020/kick=1021 同口径）")
     void delete_admin_rejected() throws Exception {
-        // 构造两个独立 ADMIN 测试用户（走真实 assignRoles 链路绑定 ADMIN 角色）
+        // 构造两个独立 ADMIN 测试用户（由预置超管经 HTTP 授权，见基类 grantAdminByPresetSuperAdmin）
         String email = uniqueEmail("del-super-a");
         String tokenA = registerAndLoginGetToken(email, "abc123");
         long idA = userIdByEmail(email);
-        userService.assignRoles(idA, List.of(adminRoleId()));
+        grantAdminByPresetSuperAdmin(idA);
 
         LoginSession b = loginGetAuth(uniqueEmail("del-super-b"), "abc123");
-        userService.assignRoles(b.userId(), List.of(adminRoleId()));
+        grantAdminByPresetSuperAdmin(b.userId());
 
         // 删除 ADMIN 用户被拒（1025），不删任何数据
         MvcResult result = mockMvc.perform(delete("/api/users/" + b.userId())
@@ -362,7 +400,7 @@ class UserEdgeTest extends BaseIntegrationTest {
         String email = uniqueEmail("del-self");
         String token = registerAndLoginGetToken(email, "abc123");
         long userId = userIdByEmail(email);
-        userService.assignRoles(userId, List.of(adminRoleId()));
+        grantAdminByPresetSuperAdmin(userId);
 
         MvcResult result = mockMvc.perform(delete("/api/users/" + userId)
                         .header("Authorization", bearerHeader(token)))
