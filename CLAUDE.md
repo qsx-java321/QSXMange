@@ -7,7 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 mvn -o -DskipTests compile        # 快速编译（离线可用，5 个模块）
 mvn -o -DskipTests package        # 打包（仅 qsx-admin 产出可执行 fat jar）
-mvn test                          # 全量测试（221 例；仅 qsx-admin 有测试）
+mvn test                          # 全量测试（230 例；仅 qsx-admin 有测试）
+# 报 "Unresolved compilation problems" 但 compile 明明通过？先 mvn clean：
+# IDE 的编译器会往 target/classes 写产物，使 Maven 的增量检查跳过 javac，
+# 于是语法错误的中间态只在测试期以 java.lang.Error 的形式暴露。
 
 # 指定测试类时**必须**带 -Dsurefire.failIfNoSpecifiedTests=false：
 # 多模块 reactor 会让 -Dtest 同时作用于 5 个模块，其余 4 个模块没有匹配的测试类，
@@ -86,9 +89,11 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 | `qsx:auth:cap:attempt:{scene}:{email}` | 错误计数，达到 max-attempts 即作废 | 与码同生共死 |
 | `qsx:auth:cap:limit:{scene}:{email}` | 发送间隔标记（`SET NX`） | 60s |
 | `qsx:auth:cap:daily:{yyyyMMdd}:{scene}:{email}` | 当日发送计数 | 24h（**日期串键**） |
+| `qsx:auth:cap:ipdaily:{yyyyMMdd}:{ip}` | 同 IP 当日发送计数（跨场景/跨邮箱，默认 30） | 24h（**日期串键**） |
 
 - **发送侧也必须原子**：限流标记 + 当日计数 + 落码 + 清零错次写在同一条 Lua 里。拆成 Java 侧 `INCR` + `EXPIRE` 会有两个静默故障——中途失败留下**无 TTL** 的键，把该 `{scene}:{email}` 永久锁死；每次发送都续期则日限退化成滑动窗口、永不触发。
 - 校验侧 `GET → 比对 → 计数 → 删除` 必须原子，否则同一张码可被并发双花（「用后即焚」失效）。
+- **投递链路的两个不可回退的决策**：① `spring.mail.properties.mail.smtp` 的三个超时必须显式配置（JavaMail 默认**无限等待**）；② `captchaMailExecutor` 用 `AbortPolicy` 而非 CallerRuns（否则队列打满时由请求线程同步做 SMTP，外部依赖劣化会把全站拖死），被拒由 `CaptchaServiceImpl` 兜住。两条都有测试固定（`MailChainConfigTest`），改回默认值即转红。
 - 投递走 `EmailService` 端口（`service/email`）：`SmtpEmailService`（本地 Mailpit 与线上真实邮箱**共用同一份**，差异只在 `spring.mail.*`）与 `DebugEmailService`（`qsx.captcha.debug=true` 时响应直返码）。**两个实现条件装配必须互斥**，都装配会启动即 `NoUniqueBeanDefinitionException`。`@Async("captchaMailExecutor")` 靠外部 Bean 调用触发代理。
 - 场景语义：`REGISTER` 要求邮箱未注册；`FORGOT_PASSWORD` 对未注册邮箱**不落码不投递、但响应与成功完全一致**（防枚举）；`CHANGE_PASSWORD` 要求登录且邮箱为本人（URL 层 permitAll，靠业务层 `SecurityUtils` 判定，未登录返回 body 业务码 401）。
 - **校验顺序统一为「前置条件 → 验证码」**（注册是「唯一性 → 验证码」）：校验成功即用后即焚，先校验会把用户手里那张有效的码烧掉。

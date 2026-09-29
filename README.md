@@ -9,7 +9,7 @@
   登出 / 踢人 / 禁用 / 删除 / 改密 / 重置密码后，旧 access token **立即失效**（不是等 30 分钟过期）。
 - **ADMIN 超管不是硬编码**：通过绑定全量权限实现，与普通角色走完全相同的判定路径。
 - **邮箱验证码**：注册、忘记密码、改密通道 B 三个自助流程，验证码四键 + 两条 Lua 原子脚本。
-- 204 例自动化集成测试 + 230 条真实 HTTP 逐笔记录锁定行为（详见[测试报告](docs/test/项目测试报告.md)）。
+- 230 例自动化集成测试 + 230 条真实 HTTP 逐笔记录锁定行为（详见[测试报告](docs/test/项目测试报告.md)）。
 
 ## 技术栈
 
@@ -91,7 +91,7 @@ curl -X POST http://localhost:8080/auth/login \
 ### 5. 运行测试
 
 ```bash
-mvn test                                                                 # 全量 204 例
+mvn test                                                                 # 全量 230 例
 mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false  # 单个类（该参数必带）
 ```
 
@@ -138,7 +138,9 @@ mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false  # 单个
 | 1017~1018 | 导入校验失败 / 数据量超限 | 1032 | 该场景验证码仅限本人邮箱 |
 
 内置资产保护（2026-09 新增，与 1011/1020/1021/1025/1026 同一家族）：
-`1033` 内置超管用户的角色不可修改 · `1035` 系统内置菜单或权限不可删除 · `1036` 内置超管角色的权限不可修改。
+`1033` 内置超管用户的角色不可修改 · `1034` 授予内置超管角色需操作者本身为超管 ·
+`1035` 系统内置菜单或权限不可删除 · `1036` 内置超管角色的权限不可修改；
+`1022`（不允许对自己执行该操作）现已覆盖分配角色——给自己改角色一律拒绝。
 
 完整清单（含触发点与文案）见 [docs/design/](docs/design/) 的《基础设施、审计与测试》§1。
 
@@ -147,7 +149,7 @@ mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false  # 单个
 | 文档 | 定位 |
 | :--- | :--- |
 | [docs/design/](docs/design/) | **详细设计文档**：架构与模块划分 · 认证与会话 · 授权与 RBAC · 邮箱验证码 · 业务功能与保护矩阵 · 基础设施、审计与测试 |
-| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 测试总报告：36 接口覆盖矩阵、204 例基线、真实 HTTP 逐笔明细；分域明细见同目录 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道` |
+| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 测试总报告：36 接口覆盖矩阵、自动化基线（当轮快照 204 例，现 230 例）、真实 HTTP 逐笔明细；分域明细见同目录 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道` |
 | [docs/question-list/](docs/question-list/) | **工程化待办清单**：#1–#40 问题、搁置项与反悔记录、当前修复方案、实测记录与核验方法 |
 | [docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md](docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md) | 全项目主线总览（发展阶段、跨阶段决策与教训） |
 | [docs/dev-env/组件依赖README.md](docs/dev-env/组件依赖README.md) | Docker 中间件清单与启停（MySQL / Redis / Mailpit 等） |
