@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 mvn -o -DskipTests compile        # 快速编译（离线可用，5 个模块）
 mvn -o -DskipTests package        # 打包（仅 qsx-admin 产出可执行 fat jar）
-mvn test                          # 全量测试（204 例；仅 qsx-admin 有测试）
+mvn test                          # 全量测试（221 例；仅 qsx-admin 有测试）
 
 # 指定测试类时**必须**带 -Dsurefire.failIfNoSpecifiedTests=false：
 # 多模块 reactor 会让 -Dtest 同时作用于 5 个模块，其余 4 个模块没有匹配的测试类，
