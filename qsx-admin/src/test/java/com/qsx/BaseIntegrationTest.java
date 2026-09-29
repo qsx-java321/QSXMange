@@ -117,6 +117,7 @@ public abstract class BaseIntegrationTest {
         cleanTestRoles();
         cleanOperationLog();
         cleanRedisKeys();
+        resetPresetAdmin();
     }
 
     @AfterEach
@@ -336,6 +337,41 @@ public abstract class BaseIntegrationTest {
     /** 预置超管（init.sql 种子数据）——闸 2 之后，授予 ADMIN 只能由它发起 */
     protected static final String PRESET_ADMIN_EMAIL = "admin@qsx.com";
     protected static final String PRESET_ADMIN_PASSWORD = "admin123";
+
+    /**
+     * 预置超管在 init.sql 里的初始口令 hash（必须与 {@link #PRESET_ADMIN_PASSWORD} 对应）。
+     *
+     * <p>与 sql/init.sql 的种子行是**两份手工同步的真源**，新增守卫用例
+     * {@code PresetAdminFixtureTest} 会在两者失配时立刻转红——否则表现是
+     * 「预置超管登录 1002」，然后经 {@code adminToken()} 扇出的 15 个测试类
+     * 以同一条 {@code IllegalStateException} 报错，定位成本极高。
+     */
+    private static final String PRESET_ADMIN_PASSWORD_HASH =
+            "$2a$10$3KuSUz6n6SzyMXi535r3Su/qP6AaVWdCvjNUx0FWVFj4DS4tca3By";
+
+    /**
+     * 把预置超管复位到「init.sql 初始口令 + 未标记强制改密」。
+     *
+     * <p>为什么必须复位：强制首次改密闸（1037）之后，标志为 1 的账号访问
+     * {@code /auth/**} 以外的接口一律被拒。预置超管的种子行就是标志 1，而
+     * {@code grantAdminByPresetSuperAdmin} 走的是 {@code PUT /api/users/{id}/roles}
+     * ——不复位的话，经 {@code adminToken()} 扇出的 15 个测试类会以同一条
+     * {@code IllegalStateException: 预置超管授权 ADMIN 失败} 集体转红，
+     * 那条报错看起来像「预置数据坏了」，极难定位到闸。
+     *
+     * <p>为什么连口令一起复位：本地手工体验过「首次登录强制改密」之后，库里的
+     * 超管口令就不再是 admin123。只清标志而不复位口令的话，这些类会以 1002 失败。
+     * 代价是**跑测试会把你改过的超管口令还原成 admin123**——这是刻意的自愈取舍，
+     * 只动 {@code admin@qsx.com} 这一行两列，不碰任何其它数据。
+     *
+     * <p>为什么不用「真实走一遍改密流程」代替本方法：那会真的改掉开发库里的口令，
+     * 而复位是幂等的（每次用例前写同一个值），改密不是。
+     */
+    private void resetPresetAdmin() {
+        jdbcTemplate.update(
+                "UPDATE sys_user SET password = ?, must_change_password = 0 WHERE email = ?",
+                PRESET_ADMIN_PASSWORD_HASH, PRESET_ADMIN_EMAIL);
+    }
 
     /** 预置超管的 token（走真实登录）；造超管与"授权类"用例都会用到 */
     protected String presetAdminToken() throws Exception {

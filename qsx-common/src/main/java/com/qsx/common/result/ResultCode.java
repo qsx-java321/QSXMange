@@ -75,7 +75,13 @@ public enum ResultCode {
     ADMIN_GRANT_REQUIRES_ADMIN(1034, "授予内置超管角色需操作者本身为超管"),
     // 文案与 1016/1023 的「菜单或权限…」口径一致：本闸同时覆盖权限码行与预置菜单行
     SYSTEM_PERMISSION_CANNOT_DELETE(1035, "系统内置菜单或权限不可删除"),
-    ADMIN_ROLE_PERMISSION_IMMUTABLE(1036, "内置超管角色的权限不可修改");
+    ADMIN_ROLE_PERMISSION_IMMUTABLE(1036, "内置超管角色的权限不可修改"),
+
+    // 准入闸 (1037)：与上面两条家族不同——它不保护"资产"，而是限制"尚未完成首次改密的账号"。
+    // 判定在 TokenAuthenticationFilter，对 /auth/** 整体豁免（否则用户没有会话就改不了密）。
+    // HTTP 状态取 200 而非 403：它是业务状态而非权限缺失，与"业务失败一律 HTTP 200 + body 业务码"
+    // 的主约定一致；403 继续只表示「已登录但无权限」。
+    PASSWORD_CHANGE_REQUIRED(1037, "当前密码为初始密码，请先修改密码后再操作");
 
     private final int code;
     private final String message;
