@@ -16,10 +16,14 @@ public interface CaptchaService {
     /**
      * 发送验证码：限流 → 落码 → 投递。
      *
+     * <p>限流有三个维度：同场景同邮箱的 60 秒间隔、同邮箱当日上限、**同客户端 IP 当日上限**
+     * （最后一个由调用方传入 IP——服务层不读 HTTP 上下文）。
+     *
+     * @param clientIp 客户端 IP，用于 IP 维度日限；传 null 或空串时按"未知来源"处理
      * @return 本次验证码；**仅 debug 模式返回**（响应直返用），正常路径返回 null
-     * @throws com.qsx.common.exception.BusinessException 1027 发送过于频繁（间隔未到 / 当日超限）
+     * @throws com.qsx.common.exception.BusinessException 1027 发送过于频繁（间隔未到 / 邮箱日限 / IP 日限）
      */
-    String send(CaptchaScene scene, String email);
+    String send(CaptchaScene scene, String email, String clientIp);
 
     /**
      * 校验验证码：成功即用后即焚（同一张码不可重放）。

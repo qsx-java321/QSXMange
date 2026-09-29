@@ -70,7 +70,7 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    public String sendCaptcha(CaptchaSendRequest request) {
+    public String sendCaptcha(CaptchaSendRequest request, String clientIp) {
         CaptchaScene scene = request.getScene();
         String email = CaptchaRedisKeys.normalizeEmail(request.getEmail());
 
@@ -101,7 +101,7 @@ public class AuthServiceImpl implements AuthService {
             }
         }
 
-        return captchaService.send(scene, email);
+        return captchaService.send(scene, email, clientIp);
     }
 
     @Override

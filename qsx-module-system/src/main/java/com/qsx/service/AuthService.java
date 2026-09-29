@@ -26,7 +26,12 @@ public interface AuthService {
      *
      * @return 验证码，**仅调试模式返回**（响应直返）；正常路径返回 null
      */
-    String sendCaptcha(CaptchaSendRequest request);
+    /**
+     * 发送验证码（匿名可调，CHANGE_PASSWORD 场景要求登录）。
+     *
+     * @param clientIp 客户端 IP，用于 IP 维度日限（服务层不读 HTTP 上下文，由控制器传入）
+     */
+    String sendCaptcha(CaptchaSendRequest request, String clientIp);
 
     /**
      * 登录，返回 access token 与 refresh token（同一用户旧会话立即失效，单端登录）

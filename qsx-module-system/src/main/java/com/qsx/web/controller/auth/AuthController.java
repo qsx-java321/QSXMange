@@ -12,6 +12,7 @@ import com.qsx.web.vo.CaptchaVO;
 import com.qsx.web.vo.LoginVO;
 import com.qsx.web.vo.RefreshVO;
 import com.qsx.web.vo.UserVO;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -41,10 +42,18 @@ public class AuthController {
     /**
      * 发送邮箱验证码（匿名放行；CHANGE_PASSWORD 场景要求登录态，由业务层判定）。
      * 正常模式下 data 为 null，仅调试模式返回 code。
+     *
+     * <p>客户端 IP 由这里取出后传给服务层（服务层不读 HTTP 上下文）：验证码是"往任意地址发信"
+     * 的公开接口，只按邮箱限流等于没限——换邮箱即有新额度，必须补 IP 维度。
+     *
+     * <p>用 {@code getRemoteAddr()} 而不是自己解析 {@code X-Forwarded-For}：XFF 是客户端可伪造的，
+     * 只有可信代理注入的才可信。若部署在反向代理后，应改用 Spring 的
+     * {@code server.forward-headers-strategy=NATIVE}（由容器按代理链剔除可信跳数）。
      */
     @PostMapping("/captcha")
-    public Result<CaptchaVO> captcha(@Valid @RequestBody CaptchaSendRequest request) {
-        String code = authService.sendCaptcha(request);
+    public Result<CaptchaVO> captcha(@Valid @RequestBody CaptchaSendRequest request,
+                                    HttpServletRequest httpRequest) {
+        String code = authService.sendCaptcha(request, httpRequest.getRemoteAddr());
         return Result.success(code == null ? null : new CaptchaVO(code));
     }
 

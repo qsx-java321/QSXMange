@@ -124,6 +124,43 @@ class CaptchaTest extends BaseIntegrationTest {
         assertThat(codeInRedis(CaptchaScene.REGISTER, email)).isEqualTo(firstCode);
     }
 
+    @Test
+    @DisplayName("IP 维度日限：同一 IP 超限后拒绝（1027），换邮箱也绕不过去")
+    void send_ipDailyLimit_blocksRegardlessOfEmail() throws Exception {
+        // 用固定假 IP：与其它用例共享的 127.0.0.1 隔离开，避免互相消耗额度
+        String ip = "203.0.113.7";
+        String email = uniqueEmail("cap-ip-quota");
+        // 把该 IP 的当日计数推到远超任何配置上限（比真发 N 次快，也不受 60s 间隔干扰）
+        stringRedisTemplate.opsForValue()
+                .set(CaptchaRedisKeys.ipDaily(ip), "999999", java.time.Duration.ofHours(1));
+
+        MvcResult result = sendCaptchaFrom(ip, CaptchaScene.REGISTER, email);
+
+        assertThat(businessCode(result))
+                .as("只按邮箱限流等于没限——换邮箱即有新额度，所以 IP 维度必须独立生效")
+                .isEqualTo(ResultCode.CAPTCHA_SEND_TOO_FREQUENT.getCode());
+        // 机制层：IP 判定先于一切写操作 ⇒ 新邮箱既不落码、也不占 60s 间隔、不计入邮箱日限
+        assertThat(stringRedisTemplate.hasKey(CaptchaRedisKeys.code(CaptchaScene.REGISTER, email))).isFalse();
+        assertThat(stringRedisTemplate.hasKey(CaptchaRedisKeys.limit(CaptchaScene.REGISTER, email))).isFalse();
+        assertThat(stringRedisTemplate.hasKey(CaptchaRedisKeys.daily(CaptchaScene.REGISTER, email))).isFalse();
+    }
+
+    @Test
+    @DisplayName("IP 维度日限只约束该 IP：换 IP 照常发送，且正常发送会累计到该 IP 计数")
+    void send_ipDailyLimit_isPerIp() throws Exception {
+        String blockedIp = "203.0.113.8";
+        stringRedisTemplate.opsForValue()
+                .set(CaptchaRedisKeys.ipDaily(blockedIp), "999999", java.time.Duration.ofHours(1));
+
+        String email = uniqueEmail("cap-ip-other");
+        assertThat(businessCode(sendCaptchaFrom("203.0.113.9", CaptchaScene.REGISTER, email))).isEqualTo(200);
+        assertThat(stringRedisTemplate.opsForValue().get(CaptchaRedisKeys.ipDaily("203.0.113.9")))
+                .as("该 IP 的当日计数应为 1（IP 计数统计的是真正发出去的请求）")
+                .isEqualTo("1");
+        assertThat(stringRedisTemplate.opsForValue().get(CaptchaRedisKeys.ipDaily(blockedIp)))
+                .as("被限流的 IP 计数不受影响").isEqualTo("999999");
+    }
+
     // ---------- 发送：场景前置条件 ----------
 
     @Test
@@ -325,6 +362,18 @@ class CaptchaTest extends BaseIntegrationTest {
     /** 模拟「60 秒发送间隔已过」：删掉间隔标记，避免用例被真实时钟卡住 */
     private void elapseSendInterval(CaptchaScene scene, String email) {
         stringRedisTemplate.delete(CaptchaRedisKeys.limit(scene, email));
+    }
+
+    /** 以指定客户端 IP 发码（MockMvc 默认 remoteAddr 是 127.0.0.1，这里显式覆盖以便隔离 IP 额度） */
+    private MvcResult sendCaptchaFrom(String clientIp, CaptchaScene scene, String email) throws Exception {
+        return mockMvc.perform(post("/auth/captcha")
+                        .with(request -> {
+                            request.setRemoteAddr(clientIp);
+                            return request;
+                        })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"scene\":\"" + scene.name() + "\",\"email\":\"" + email + "\"}"))
+                .andReturn();
     }
 
     private String codeInRedis(CaptchaScene scene, String email) {

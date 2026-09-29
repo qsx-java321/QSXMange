@@ -2,11 +2,17 @@
 --
 -- KEYS[1] = code 键              KEYS[2] = attempt 键
 -- KEYS[3] = limit 键（60s 间隔）  KEYS[4] = daily 键（日期串）
+-- KEYS[5] = ipDaily 键（日期串 + 客户端 IP）
 -- ARGV[1] = code
 -- ARGV[2] = codeTtlSeconds  ARGV[3] = gapTtlSeconds
 -- ARGV[4] = dailyTtlSeconds ARGV[5] = dailyLimit
+-- ARGV[6] = ipDailyLimit
 --
--- 返回：'OK' | 'GAP'（间隔未到） | 'QUOTA'（当日超限）
+-- 返回：'OK' | 'GAP'（间隔未到） | 'QUOTA'（该邮箱当日超限） | 'IP_QUOTA'（该 IP 当日超限）
+--
+-- IP 维度的判定刻意**先读后判、不消费任何计数就拒绝**：只按邮箱限流等于没限
+-- （换邮箱即有新额度），而 IP 额度是"单个来源的总发送量"的唯一约束。
+-- 读与自增都在同一条脚本里，脚本本身原子，故不存在"读到未超、写时已超"的窗口。
 --
 -- 为什么必须整段原子（而不是 Java 侧 INCR + EXPIRE）：
 --   ① INCR 成功而 EXPIRE 未执行（进程中断 / 连接断开）会留下**永不过期**的键，
@@ -20,12 +26,19 @@ local codeKey = KEYS[1]
 local attemptKey = KEYS[2]
 local limitKey = KEYS[3]
 local dailyKey = KEYS[4]
+local ipDailyKey = KEYS[5]
 
 local code = ARGV[1]
 local codeTtl = tonumber(ARGV[2])
 local gapTtl = tonumber(ARGV[3])
 local dailyTtl = tonumber(ARGV[4])
 local dailyLimit = tonumber(ARGV[5])
+local ipDailyLimit = tonumber(ARGV[6])
+
+-- 0. IP 维度日限：先判后算，超限时连 60s 间隔都不占用（不留任何副作用）
+if tonumber(redis.call('GET', ipDailyKey) or '0') >= ipDailyLimit then
+    return 'IP_QUOTA'
+end
 
 -- 60s 间隔：SET NX 原子占位，占不到说明刚发过。
 -- 注意判定写法：RESP2 下 SET 成功返回的是 table（{ok='OK'}）而非字符串 'OK'，
@@ -42,6 +55,13 @@ end
 if sent > dailyLimit then
     -- 刻意不回滚已占用的 limit 键：该用户当日已到顶，60s 间隔已无意义
     return 'QUOTA'
+end
+
+-- IP 计数只统计**真正发出去**的请求（放在邮箱侧各项校验之后）：
+-- 这样"被 60s 间隔或邮箱日限拒掉的重试"不会消耗 IP 额度，NAT 后的正常用户不易被误伤
+local ipSent = redis.call('INCR', ipDailyKey)
+if ipSent == 1 then
+    redis.call('EXPIRE', ipDailyKey, dailyTtl)
 end
 
 redis.call('SET', codeKey, code, 'EX', codeTtl)

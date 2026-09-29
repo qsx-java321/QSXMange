@@ -31,6 +31,16 @@ spring:
     port: 1025
     username: ""      # Mailpit 不校验账号密码
     password: ""
+    properties:
+      mail:
+        smtp:
+          # ⚠️ 三个超时必须显式配置：JavaMail 的默认值是「无限等待」，一旦 SMTP 服务商被
+          # greylist、限流，或链路丢包（连上后对端不响应），投递线程会一直挂住不归还。
+          # 这种"挂住"会沿着 captchaMailExecutor 扩散：队列打满后由请求线程兜底执行，
+          # Tomcat 线程被钉死在 SMTP 上 ⇒ 全站不可用（docs/question-list/01 #22）。
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
 
 mybatis-plus:
   # Mapper XML 位置
@@ -73,6 +83,9 @@ qsx:
     send-interval: 60s
     # 同场景同邮箱的每日发送上限
     daily-limit: 10
+    # 同一客户端 IP 的每日发送上限（跨邮箱累计）：每个邮箱各有 10 次额度，
+    # 不设 IP 维度的话"换邮箱"就等于无限额度，可被用来向任意地址群发（#14/#22）
+    ip-daily-limit: 30
     # 发件地址（Mailpit 可用任意地址；真实服务商多数要求该地址已备案/校验）
     from-address: no-reply@qsx.local
   # 双 token 会话配置（Redis 为令牌有效性的唯一真相源）

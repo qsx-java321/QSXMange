@@ -45,6 +45,18 @@ public class CaptchaProperties {
     private int dailyLimit = 10;
 
     /**
+     * 同一客户端 IP 的每日发送上限（跨场景、跨邮箱累计）。
+     *
+     * <p>邮箱维度的额度是"每个邮箱 10 次"，只按邮箱限流等于没限——攻击者换邮箱即有新额度，
+     * 可用来向任意地址群发。IP 维度是唯一能约束"单个来源的总发送量"的口子
+     * （docs/question-list/01 #14、#22）。
+     *
+     * <p>注意取值要容忍 NAT 后的正常用户：太小会误伤同一出口 IP 的公司/学校网络。
+     */
+    @Min(value = 1, message = "ip-daily-limit 至少为 1")
+    private int ipDailyLimit = 30;
+
+    /**
      * 发件人地址。本地 Mailpit 可用任意地址；切换真实邮件服务商时，
      * 多数服务商要求发件地址已备案/校验，改这一项即可（代码零改动）。
      */

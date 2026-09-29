@@ -37,6 +37,7 @@ public class CaptchaServiceImpl implements CaptchaService {
     private static final String SEND_OK = "OK";
     private static final String SEND_GAP = "GAP";
     private static final String SEND_QUOTA = "QUOTA";
+    private static final String SEND_IP_QUOTA = "IP_QUOTA";
 
     private static final String VERIFY_OK = "OK";
     private static final String VERIFY_LOCK = "LOCK";
@@ -71,9 +72,10 @@ public class CaptchaServiceImpl implements CaptchaService {
     }
 
     @Override
-    public String send(CaptchaScene scene, String email) {
+    public String send(CaptchaScene scene, String email, String clientIp) {
         String target = CaptchaRedisKeys.normalizeEmail(email);
         String code = randomCode();
+        String ipKey = CaptchaRedisKeys.ipDaily(sourceIp(clientIp));
 
         String result;
         try {
@@ -81,21 +83,25 @@ public class CaptchaServiceImpl implements CaptchaService {
                     List.of(CaptchaRedisKeys.code(scene, target),
                             CaptchaRedisKeys.attempt(scene, target),
                             CaptchaRedisKeys.limit(scene, target),
-                            CaptchaRedisKeys.daily(scene, target)),
+                            CaptchaRedisKeys.daily(scene, target),
+                            ipKey),
                     code,
                     String.valueOf(properties.ttlSeconds()),
                     String.valueOf(properties.sendIntervalSeconds()),
                     String.valueOf(properties.dailyTtlSeconds()),
-                    String.valueOf(properties.getDailyLimit()));
+                    String.valueOf(properties.getDailyLimit()),
+                    String.valueOf(properties.getIpDailyLimit()));
         } catch (Exception e) {
             // fail-closed：发不出码就不放行（Redis 异常在此不降级）
             log.error("发送验证码失败（Redis 异常，fail-closed）, scene={}, email={}", scene, mask(target), e);
             throw new IllegalStateException("发送验证码失败, scene=" + scene, e);
         }
 
-        if (SEND_GAP.equals(result) || SEND_QUOTA.equals(result)) {
-            // 间隔与日限共用同一业务码：对用户而言「现在别再点了」是同一个动作
-            log.info("验证码发送被限流, scene={}, email={}, reason={}", scene, mask(target), result);
+        if (SEND_GAP.equals(result) || SEND_QUOTA.equals(result) || SEND_IP_QUOTA.equals(result)) {
+            // 间隔、邮箱日限、IP 日限共用同一业务码：对用户而言「现在别再点了」是同一个动作。
+            // 日志区分 reason，便于运维区分"某个用户在猛点"与"某个 IP 在群发"
+            log.info("验证码发送被限流, scene={}, email={}, ip={}, reason={}",
+                    scene, mask(target), sourceIp(clientIp), result);
             throw new BusinessException(ResultCode.CAPTCHA_SEND_TOO_FREQUENT);
         }
         if (!SEND_OK.equals(result)) {
@@ -105,7 +111,16 @@ public class CaptchaServiceImpl implements CaptchaService {
 
         // 投递在落码之后：投递方式（SMTP 异步 / 调试直返）对业务透明，
         // 且投递失败不应让接口报错——码已在 Redis 中，用户重发即可
-        emailService.sendVerificationCode(scene, target, code);
+        try {
+            emailService.sendVerificationCode(scene, target, code);
+        } catch (Exception e) {
+            // 邮件池用 AbortPolicy：队列打满时**提交这一刻**就抛 RejectedExecutionException，
+            // 此时异步方法还没进去，SmtpEmailService 内部的 try/catch 拦不到，只能由调用方兜住。
+            // 处理口径与"投递失败"一致：码已落 Redis，接口照常成功，ERROR 留痕（可检索、可告警）。
+            // 代价是用户要等满 60 秒发送间隔才能重发——比把请求线程钉死在 SMTP 上划算（见 #22）
+            log.error("验证码邮件投递任务被拒绝或提交失败（邮件线程池已满？），码已落 Redis，用户可重发,"
+                    + " scene={}, email={}", scene, mask(target), e);
+        }
 
         // 仅调试模式把码交回调用方（响应直返）；正常路径不返回
         return properties.isDebug() ? code : null;
@@ -147,6 +162,16 @@ public class CaptchaServiceImpl implements CaptchaService {
         }
         log.error("校验验证码返回非预期结果, scene={}, result={}", scene, result);
         throw new IllegalStateException("校验验证码失败, result=" + result);
+    }
+
+    /**
+     * 客户端 IP 兜底：缺失时归一为 {@code unknown}。
+     *
+     * <p>不能直接用 null 拼键（会变成字面量 "null" 且所有缺 IP 的请求共享一个额度）——
+     * 统一成 unknown 至少语义明确，且不会与真实 IP 撞键。
+     */
+    private static String sourceIp(String clientIp) {
+        return (clientIp == null || clientIp.isBlank()) ? "unknown" : clientIp.trim();
     }
 
     /** 6 位数字，含前导零 */

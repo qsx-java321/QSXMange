@@ -64,6 +64,16 @@ public final class CaptchaRedisKeys {
     }
 
     /**
+     * 客户端 IP 的当日发送计数（跨场景、跨邮箱累计）。
+     *
+     * <p>IP 不做归一化：它来自 {@code request.getRemoteAddr()}，本身就是规范化形态
+     * （IPv6 的不同写法由 JDK 统一输出，不需要我们再折叠）。
+     */
+    public static String ipDaily(String clientIp) {
+        return PREFIX + "ipdaily:" + LocalDate.now().format(DAY_FORMATTER) + ":" + clientIp;
+    }
+
+    /**
      * 邮箱归一化——**发送与校验必须用同一口径**，否则算出的键不同、校验必然失败。
      *
      * <p>折叠大小写是必须的：{@code sys_user.email} 列的 collation 是
