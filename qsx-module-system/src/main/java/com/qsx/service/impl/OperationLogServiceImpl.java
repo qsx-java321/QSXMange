@@ -78,7 +78,7 @@ public class OperationLogServiceImpl implements OperationLogService, AccessLogRe
      * 于是任何人在 URL 后面挂一长串查询参数就能让自己的请求不留审计痕迹
      * （切面写的就是 {@code uri + "?" + queryString} 整串，而查询 DTO 对关键字长度没有约束）。
      * 截断会牺牲尾部信息，但保住了"这次请求发生过"这一审计底线。
-     * 见 docs/question-list/01 #23。
+     * 见 docs/question-list #23。
      */
     private static String truncate(String value, int max, String field) {
         if (value == null || value.length() <= max) {

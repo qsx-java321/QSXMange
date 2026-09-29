@@ -20,6 +20,7 @@ import com.qsx.web.dto.request.RoleCreateRequest;
 import com.qsx.web.dto.request.RoleUpdateRequest;
 import com.qsx.web.vo.RoleVO;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -107,7 +108,14 @@ public class RoleServiceImpl implements RoleService {
         role.setName(request.getName());
         role.setDescription(request.getDescription());
         role.setStatus(request.getStatus() == null ? 0 : request.getStatus());
-        roleMapper.insert(role);
+        try {
+            roleMapper.insert(role);
+        } catch (DuplicateKeyException e) {
+            // 判重与插入之间的并发窗口（双击/并发建角色）：uk_role_code 兜住了一致性，
+            // 但异常直穿会变成 body 500「系统繁忙」。映射回与判重一致的业务码
+            //（docs/question-list #27）
+            throw new BusinessException(ResultCode.ROLE_CODE_EXISTS);
+        }
         return RoleVO.from(role);
     }
 

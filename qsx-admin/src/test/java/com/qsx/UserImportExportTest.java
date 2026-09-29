@@ -1,11 +1,17 @@
 package com.qsx;
 
 import com.alibaba.excel.EasyExcel;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.qsx.domain.entity.User;
 import com.qsx.domain.entity.UserRole;
 import com.qsx.web.dto.excel.UserExportRow;
 import com.qsx.web.dto.excel.UserImportRow;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import org.apache.poi.xssf.usermodel.XSSFCell;
+import org.apache.poi.xssf.usermodel.XSSFRow;
+import org.apache.poi.xssf.usermodel.XSSFSheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -96,7 +102,7 @@ class UserImportExportTest extends BaseIntegrationTest {
         assertEquals(email2, u2.getNickname());
 
         // 导入落库即置「必须首次改密」：全批次共用同一个公开口令，不强制改密等于批量签发
-        // 已知口令的账号（docs/question-list/01 #4）。
+        // 已知口令的账号（docs/question-list #4）。
         // ⚠️ 这条断言同时是 **UserMapper.insertBatch 列清单**的守卫——那条 SQL 是手写的
         // INSERT ... VALUES <foreach>，列清单里漏掉 must_change_password 就会静默取 DB 默认 0，
         // 别的用例都不会红，只有这里会。
@@ -145,7 +151,7 @@ class UserImportExportTest extends BaseIntegrationTest {
         // 因此必须在 validateRow 里独立拦一道，与 DTO 的 @Size 保持同一上限。
         // 注意这道闸不是"修 500"（120 字符仍塞得进 VARCHAR(128)，不拦反而会成功），
         // 它拦的是**造出将来删不掉的账号**：逻辑删除要把邮箱改写成「原邮箱 + 22 字符后缀」，
-        // 超过 106 字符的邮箱会在改写时溢出 → DELETE 永远 500（见 docs/question-list/01 #19）
+        // 超过 106 字符的邮箱会在改写时溢出 → DELETE 永远 500（见 docs/question-list #19）
         String token = adminToken();
         String longEmail = "e".repeat(111) + "@test.com";   // 120 字符
         String okEmail = uniqueEmail("imp-ok2");
@@ -226,6 +232,81 @@ class UserImportExportTest extends BaseIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(1017))
                 .andExpect(jsonPath("$.data.errors[0]").value(containsString("重复")));
+    }
+
+    @Test
+    @DisplayName("导入含公式单元格：显式拒绝并给出行列位置（原为静默丢值 / 英文异常回显）")
+    void importUsers_formulaCell_shouldRejectWithPosition() throws Exception {
+        // 公式是 EasyExcel「读不出值」的特殊单元格：它只取公式的缓存值，不带缓存值时整格读成
+        // null。修复前该行会被静默导入（昵称列公式读成 null ⇒ 默认取邮箱，用户拿到错误数据），
+        // 若缓存值类型不匹配还会以 NumberFormatException 的英文原文回显 1017（#24）。
+        // 修复后：解析阶段借助 ReadCellData#getFormulaData 探测到公式，整批拒绝并给出行列位置
+        String token = adminToken();
+        String email = uniqueEmail("imp-formula");
+        MockMultipartFile file = formulaExcelFile(email, false);
+
+        mockMvc.perform(multipart("/api/users/import")
+                        .file(file)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1017))
+                .andExpect(jsonPath("$.data.successCount").value(0))
+                .andExpect(jsonPath("$.data.errors[0]").value(containsString("第 2 行")))
+                .andExpect(jsonPath("$.data.errors[0]").value(containsString("公式")));
+
+        // 整批拒绝：该行账号不得入库
+        assertNull(userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getEmail, email)));
+    }
+
+    @Test
+    @DisplayName("导入公式带非法缓存值：1017 固定文案，不回显底层英文异常原文")
+    void importUsers_formulaBadCachedValue_shouldReturnFixedMessage() throws Exception {
+        // docs/question-list #24 实测的「公式**带**缓存值」路径：缓存值非数字且不带 t 属性时，
+        // EasyExcel 按数值解析 → BigDecimal 抛 NumberFormatException → 读取中断。
+        // 修复前该异常原文（"...Character a is neither a decimal digit..."）会随 1017 回显（#17）
+        String token = adminToken();
+        String email = uniqueEmail("imp-formula-bad");
+        MockMultipartFile file = formulaExcelFile(email, true);
+
+        MvcResult result = mockMvc.perform(multipart("/api/users/import")
+                        .file(file)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1017))
+                .andReturn();
+
+        String message = objectMapper.readTree(result.getResponse().getContentAsString())
+                .path("message").asText();
+        assertTrue(message.contains("Excel 文件解析失败"), "应是固定文案：" + message);
+        // 不回显底层异常原文（#17）：英文实现细节既误导用户定位、又暴露内部结构
+        assertFalse(message.contains("Exception"), "不应回显异常类名：" + message);
+        assertFalse(message.contains("java"), "不应回显技术细节：" + message);
+        assertNull(userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getEmail, email)));
+    }
+
+    @Test
+    @DisplayName("并发窗口兜底：邮箱被逻辑删除行占用唯一索引时，导入返回 1017 而非 500")
+    void importUsers_uniqueIndexRace_fallsBackTo1017() throws Exception {
+        // 与注册/建号同源的「校验快照 → 插入」窗口（#27 同族）：导入的库内查重同样走
+        // @TableLogic 过滤，用「逻辑删除行仍物理占用 uk_email」即可确定性构造——
+        // 查重通过、批量插入撞唯一索引；修复前该异常直穿成 body 500（整批事务会回滚）
+        String token = adminToken();
+        String email = uniqueEmail("imp-race");
+        jdbcTemplate.update("INSERT INTO sys_user (email, password, nickname, status, must_change_password, deleted) "
+                + "VALUES (?, ?, ?, 0, 0, 1)", email, "$2a$10$race-placeholder", "占位行");
+
+        MockMultipartFile file = excelFile(List.of(row(email, "并发导入", "0", "")));
+
+        MvcResult result = mockMvc.perform(multipart("/api/users/import")
+                        .file(file)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertEquals(1017, json.path("code").asInt(), "必须映射为业务码，而不是 500");
+        assertTrue(json.path("message").asText().contains("冲突"),
+                "提示应可行动：" + json.path("message").asText());
     }
 
     @Test
@@ -352,5 +433,44 @@ class UserImportExportTest extends BaseIntegrationTest {
                 .doWrite(rows);
         return new MockMultipartFile(
                 "file", "users.xlsx", EXCEL_CONTENT_TYPE, out.toByteArray());
+    }
+
+    /**
+     * 构造含**真公式单元格**的 xlsx（POI 直写——EasyExcel 只能写值、写不出公式）。
+     *
+     * <p>列顺序与 {@code UserImportRow} 的字段顺序一致（读取时按 index 映射）。
+     *
+     * @param badCachedValue true 时给公式格注入非数字缓存值（见下），复现
+     *                       docs/question-list #24 的「公式带缓存值 → NumberFormatException」
+     *                       路径；false 时保持 POI 默认（只有 {@code <f>} 无缓存值），
+     *                       即 #24 里「静默读成 null」的那条路径
+     */
+    private MockMultipartFile formulaExcelFile(String email, boolean badCachedValue) throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            XSSFSheet sheet = workbook.createSheet("用户导入");
+            XSSFRow header = sheet.createRow(0);
+            header.createCell(0).setCellValue("邮箱");
+            header.createCell(1).setCellValue("昵称");
+            header.createCell(2).setCellValue("状态");
+            header.createCell(3).setCellValue("角色编码");
+
+            XSSFRow data = sheet.createRow(1);
+            data.createCell(0).setCellValue(email);
+            // 昵称列用公式：不修复时整格读成 null → 昵称静默回退为邮箱，用户拿到错误数据
+            XSSFCell nickname = data.createCell(1);
+            nickname.setCellFormula("CONCATENATE(\"公式\",\"昵称\")");
+            if (badCachedValue) {
+                // 注入非数字缓存值且**不带 t 属性**（POI 高层 API 禁止公式格同时带值，
+                // 只能走底层 CTCell）：EasyExcel 会按数值解析 → BigDecimal("abc") 抛异常。
+                // 这正是「有缓存值」的真实形态——缓存值由 Excel/WPS 计算后写入文件
+                nickname.getCTCell().setV("abc");
+            }
+            data.createCell(2).setCellValue("0");
+
+            workbook.write(out);
+            return new MockMultipartFile(
+                    "file", "users.xlsx", EXCEL_CONTENT_TYPE, out.toByteArray());
+        }
     }
 }

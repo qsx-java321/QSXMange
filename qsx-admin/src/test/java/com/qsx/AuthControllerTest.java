@@ -41,12 +41,33 @@ class AuthControllerTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("并发窗口兜底：邮箱被逻辑删除行占用唯一索引时，注册返回 1001 而非 500")
+    void register_uniqueIndexRace_fallsBackTo1001() throws Exception {
+        // 「查重 → 插入」之间存在并发窗口（并发/双击注册）。uk_email 兜住了一致性，
+        // 但修复前 DuplicateKeyException 直穿会变成 body 500。
+        // 这里用「逻辑删除行仍物理占用 uk_email」构造等价场景：getByEmail 被 @TableLogic
+        // 过滤 ⇒ 查重通过，插入必然撞唯一索引。删除接口会给邮箱改写 #deleted_ 后缀释放索引，
+        // 因此本场景等价于"存量老数据"（#27 的另一条真实触发路径）
+        String email = uniqueEmail("race-reg");
+        jdbcTemplate.update("INSERT INTO sys_user (email, password, nickname, status, must_change_password, deleted) "
+                + "VALUES (?, ?, ?, 0, 0, 1)", email, "$2a$10$race-placeholder", "占位行");
+
+        MvcResult result = register(email, "abc123");
+
+        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(json.path("code").asInt()).as("必须映射为业务码，而不是 500").isEqualTo(1001);
+        assertThat(userMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User>()
+                        .eq(User::getEmail, email))).as("不得新增可见账号").isNull();
+    }
+
+    @Test
     @DisplayName("注册邮箱超长：400（而非 500），且不落库")
     void register_emailTooLong_rejectedAs400() throws Exception {
         // 101 字符 = EMAIL_MAX + 1。@Email 只限制「本地部分 ≤64、域名标签 ≤63」而不限总长度
         // （Hibernate Validator 实测可放行 260 字符的地址），所以超长地址靠加长域名构造，
         // 拦它的只有 DTO 上的 @Size；没有它就会一路走到 INSERT 撞 VARCHAR(128)，
-        // 以 1406 → 500 收场（详见 docs/question-list/01 #19）
+        // 以 1406 → 500 收场（详见 docs/question-list #19）
         String email = longEmail(101);
         assertThat(email).hasSize(101);
 

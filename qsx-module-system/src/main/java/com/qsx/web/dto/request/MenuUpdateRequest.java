@@ -1,7 +1,10 @@
 package com.qsx.web.dto.request;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -19,7 +22,15 @@ public class MenuUpdateRequest {
     @Size(max = 50, message = "菜单名称长度不能超过50")
     private String name;
 
+    /**
+     * 类型取值白名单：与 {@link com.qsx.common.constant.PermissionConstants} 的
+     * {@code TYPE_MENU}/{@code TYPE_PERMISSION} 同步（注解写不了常量）。
+     * 修改路径此前完全无约束，填错会让菜单树按 {@code type == "MENU"} 过滤时静默失配
+     * （docs/question-list #39）。
+     * 注意与 {@link MenuCreateRequest} 的差别：新增留空表示取默认 MENU，修改为必填。
+     */
     @NotNull(message = "类型不能为空")
+    @Pattern(regexp = "MENU|PERMISSION", message = "类型只能为 MENU 或 PERMISSION")
     private String type;
 
     /** 父ID：0-顶级 */
@@ -35,8 +46,12 @@ public class MenuUpdateRequest {
     private String icon;
 
     @NotNull(message = "是否显示不能为空")
+    @Min(value = 0, message = "是否显示只能为 0(隐藏) 或 1(显示)")
+    @Max(value = 1, message = "是否显示只能为 0(隐藏) 或 1(显示)")
     private Integer visible;
 
     @NotNull(message = "排序不能为空")
+    @Min(value = 0, message = "排序取值范围为 0~9999")
+    @Max(value = 9999, message = "排序取值范围为 0~9999")
     private Integer sort;
 }

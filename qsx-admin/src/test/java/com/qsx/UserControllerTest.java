@@ -64,6 +64,22 @@ class UserControllerTest extends BaseIntegrationTest {
         return email;
     }
 
+    @Test
+    @DisplayName("并发窗口兜底：邮箱被逻辑删除行占用唯一索引时，建号返回 1001 而非 500")
+    void createUser_uniqueIndexRace_fallsBackTo1001() throws Exception {
+        // 与注册同源的「查重 → 插入」窗口（#27）：用「逻辑删除行仍物理占用 uk_email」构造，
+        // getByEmail 被 @TableLogic 过滤 ⇒ 查重通过、插入撞唯一索引；修复前是 body 500
+        String token = adminToken();
+        String email = uniqueEmail("race-create");
+        jdbcTemplate.update("INSERT INTO sys_user (email, password, nickname, status, must_change_password, deleted) "
+                + "VALUES (?, ?, ?, 0, 0, 1)", email, "$2a$10$race-placeholder", "占位行");
+
+        MvcResult result = createUser(token, email, "abc123", null);
+
+        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(json.path("code").asInt()).as("必须映射为业务码，而不是 500").isEqualTo(1001);
+    }
+
     // ---------- 分页查询 ----------
 
     @Test
@@ -349,7 +365,7 @@ class UserControllerTest extends BaseIntegrationTest {
         // 100 字符 = UserConstants.EMAIL_MAX，是接口允许的最长邮箱。
         // 删除要把邮箱改写成「原邮箱 + #deleted_ + 13 位毫秒」（共 22 字符）来释放唯一索引，
         // 上限若取得过大（如最初文档里写的 110）就会在这一步撞 VARCHAR(128) → 500，
-        // 且该账号永远删不掉（历史缺陷，见 docs/question-list/01 #19）
+        // 且该账号永远删不掉（历史缺陷，见 docs/question-list #19）
         String email = longEmail(100);
         assertThat(email).hasSize(100);
         MvcResult created = createUser(token, email, "abc123", 0);

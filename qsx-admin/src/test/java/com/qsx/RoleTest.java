@@ -15,8 +15,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -296,6 +302,35 @@ class RoleTest extends BaseIntegrationTest {
         String token = adminToken();
         long roleId = newRole(token, uniqueRoleCode());
         assertThat(roleStatus(roleId)).isZero();
+    }
+
+    @Test
+    @DisplayName("并发创建相同角色编码：唯一索引兜底，不得出现未映射的 500")
+    void create_concurrent_sameCode_noServerError() throws Exception {
+        String token = adminToken();
+        String code = uniqueRoleCode();
+        int threads = 4;
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            List<Future<Integer>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    barrier.await(10, TimeUnit.SECONDS);
+                    return codeOf(createRole(token, code));
+                }));
+            }
+            List<Integer> codes = new ArrayList<>();
+            for (Future<Integer> future : futures) {
+                codes.add(future.get(30, TimeUnit.SECONDS));
+            }
+            // 判重与插入之间的并发窗口（#27）：唯一索引保证只有一个成功，
+            // 其余必须落到业务码 1010，而不是 DuplicateKeyException 直穿的 500
+            assertThat(codes).as("并发撞唯一索引必须映射为 1010，而不是 500").doesNotContain(500);
+            assertThat(codes).filteredOn(c -> c == 200).as("唯一索引保证只有一个插入成功").hasSize(1);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     // ---------- 修改 ----------

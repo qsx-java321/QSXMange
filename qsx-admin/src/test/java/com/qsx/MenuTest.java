@@ -15,8 +15,14 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -82,6 +88,11 @@ class MenuTest extends BaseIntegrationTest {
     private long menuId(MvcResult result) throws Exception {
         return objectMapper.readTree(result.getResponse().getContentAsString())
                 .path("data").path("id").asLong();
+    }
+
+    /** 取 body 里的业务码 */
+    private int bodyCode(MvcResult result) throws Exception {
+        return objectMapper.readTree(result.getResponse().getContentAsString()).path("code").asInt();
     }
 
     private MvcResult createRole(String token, String code) throws Exception {
@@ -236,6 +247,117 @@ class MenuTest extends BaseIntegrationTest {
         MvcResult again = createMenu(token, code, "重建", "MENU", 0L, 1);
         assertThat(objectMapper.readTree(again.getResponse().getContentAsString()).path("code").asInt())
                 .isEqualTo(1016);
+    }
+
+    @Test
+    @DisplayName("菜单 type/visible/sort 白名单：非法取值一律 400（原为静默落库）")
+    void menu_fieldWhitelist_validated() throws Exception {
+        String token = adminToken();
+        String code = TEST_PREFIX + "wl-" + uniqueSuffix();
+        String createBase = "{\"code\":\"" + code + "\",\"name\":\"白名单测试\"";
+
+        // type 写错大小写：修复前会静默落库，而菜单树按 type == "MENU" 过滤
+        // ⇒ 该菜单对所有用户的菜单树静默消失（#39）
+        assertThat(bodyCode(postMenuRaw(token, createBase + ",\"type\":\"menu\"}")))
+                .as("type 必须走白名单").isEqualTo(400);
+        assertThat(bodyCode(postMenuRaw(token, createBase + ",\"visible\":2}"))).isEqualTo(400);
+        assertThat(bodyCode(postMenuRaw(token, createBase + ",\"sort\":-1}"))).isEqualTo(400);
+        assertThat(bodyCode(postMenuRaw(token, createBase + ",\"sort\":10000}"))).isEqualTo(400);
+        // 非法取值不得落库
+        assertThat(permissionMapper.selectList(new LambdaQueryWrapper<com.qsx.domain.entity.Permission>()
+                .eq(com.qsx.domain.entity.Permission::getCode, code))).isEmpty();
+
+        // 合法取值仍可创建（防校验误伤）
+        long id = menuId(createMenu(token, code, "白名单测试", "MENU", 0L, 99));
+
+        // 修改路径同样受约束（MenuUpdateRequest）
+        String updateBase = "{\"code\":\"" + code + "\",\"name\":\"白名单测试\"";
+        assertThat(bodyCode(putMenuRaw(token, id,
+                updateBase + ",\"type\":\"BUTTON\",\"visible\":1,\"sort\":1}"))).isEqualTo(400);
+        assertThat(bodyCode(putMenuRaw(token, id,
+                updateBase + ",\"type\":\"MENU\",\"visible\":2,\"sort\":1}"))).isEqualTo(400);
+        assertThat(bodyCode(putMenuRaw(token, id,
+                updateBase + ",\"type\":\"MENU\",\"visible\":1,\"sort\":10000}"))).isEqualTo(400);
+        // 校验失败不得产生半成品写入
+        assertThat(permissionMapper.selectById(id).getType()).isEqualTo("MENU");
+    }
+
+    @Test
+    @DisplayName("并发创建相同菜单标识：唯一索引兜底，不得出现未映射的 500")
+    void menu_create_concurrent_sameCode_noServerError() throws Exception {
+        String token = adminToken();
+        String code = TEST_PREFIX + "race-" + uniqueSuffix();
+        int threads = 4;
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            List<Future<Integer>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    barrier.await(10, TimeUnit.SECONDS);
+                    MvcResult result = mockMvc.perform(post("/api/menus")
+                                    .header("Authorization", bearerHeader(token))
+                                    .contentType(MediaType.APPLICATION_JSON)
+                                    .content("{\"code\":\"" + code + "\",\"name\":\"并发菜单\",\"type\":\"MENU\"}"))
+                            .andReturn();
+                    return bodyCode(result);
+                }));
+            }
+            List<Integer> codes = new ArrayList<>();
+            for (Future<Integer> future : futures) {
+                codes.add(future.get(30, TimeUnit.SECONDS));
+            }
+            // 判重与插入之间的并发窗口：唯一索引保证只有一个成功，
+            // 其余必须落到业务码 1016，而不是 DuplicateKeyException 直穿的 500
+            assertThat(codes).as("并发撞唯一索引必须映射为 1016，而不是 500").doesNotContain(500);
+            assertThat(codes).filteredOn(c -> c == 200).as("唯一索引保证只有一个插入成功").hasSize(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("权限分页排序补 id tiebreaker：同 sort 的行顺序稳定（不再靠存储引擎的偶然顺序）")
+    void permissionPage_sameSort_orderedById() throws Exception {
+        String token = adminToken();
+        // 三条同 sort 的测试菜单，用 code 前缀过滤后即为完整结果集
+        String prefix = TEST_PREFIX + "ord-" + uniqueSuffix();
+        long id1 = menuId(createMenu(token, prefix + "-a", "排序A", "MENU", 0L, 8888));
+        long id2 = menuId(createMenu(token, prefix + "-b", "排序B", "MENU", 0L, 8888));
+        long id3 = menuId(createMenu(token, prefix + "-c", "排序C", "MENU", 0L, 8888));
+
+        JsonNode records = objectMapper.readTree(mockMvc.perform(get("/api/permissions")
+                        .header("Authorization", bearerHeader(token))
+                        .param("code", prefix)
+                        .param("pageSize", "500"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString())
+                .path("data").path("records");
+
+        assertThat(records.size()).isEqualTo(3);
+        List<Long> ids = new ArrayList<>();
+        records.forEach(node -> ids.add(node.path("id").asLong()));
+        // sort 相同时按 id 升序兜底：只按 sort 排序是非全序，跨页可能重复/漏行（#38）
+        assertThat(ids).containsExactly(id1, id2, id3);
+    }
+
+    /** 直接 POST 一段菜单创建 JSON（不做状态码断言，由调用方检查业务码） */
+    private MvcResult postMenuRaw(String token, String json) throws Exception {
+        return mockMvc.perform(post("/api/menus")
+                        .header("Authorization", bearerHeader(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andExpect(status().isOk())
+                .andReturn();
+    }
+
+    /** 直接 PUT 一段菜单修改 JSON（不做状态码断言，由调用方检查业务码） */
+    private MvcResult putMenuRaw(String token, long id, String json) throws Exception {
+        return mockMvc.perform(put("/api/menus/" + id)
+                        .header("Authorization", bearerHeader(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andExpect(status().isOk())
+                .andReturn();
     }
 
     @Test

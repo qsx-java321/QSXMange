@@ -28,6 +28,7 @@ import com.qsx.web.vo.RefreshVO;
 import com.qsx.web.vo.UserVO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.DisabledException;
@@ -123,7 +124,14 @@ public class AuthServiceImpl implements AuthService {
         user.setNickname(StringUtils.hasText(request.getNickname())
                 ? request.getNickname() : UserConstants.defaultNickname(request.getEmail()));
         user.setStatus(0); // 默认正常
-        userService.save(user);
+        try {
+            userService.save(user);
+        } catch (DuplicateKeyException e) {
+            // 「查重 → 插入」之间的并发窗口（同一邮箱并发/双击注册）：uk_email 兜住了一致性，
+            // 但异常直穿会变成 body 500「系统繁忙」。映射回与查重一致的业务码
+            //（docs/question-list #27）
+            throw new BusinessException(ResultCode.EMAIL_ALREADY_REGISTERED);
+        }
     }
 
     @Override

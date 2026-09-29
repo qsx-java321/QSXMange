@@ -2,6 +2,8 @@ package com.qsx.service.impl;
 
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
+import com.alibaba.excel.metadata.Cell;
+import com.alibaba.excel.metadata.data.ReadCellData;
 import com.alibaba.excel.read.listener.ReadListener;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.qsx.common.constant.RoleConstants;
@@ -20,7 +22,9 @@ import com.qsx.web.dto.excel.UserExportRow;
 import com.qsx.web.dto.excel.UserImportRow;
 import com.qsx.web.dto.query.UserQuery;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,6 +52,7 @@ import java.util.stream.Collectors;
  * - 导入采用"整批校验 + 整体拒绝"：全部数据行合法才单事务落库，否则返回全部错误行明细
  * - 默认密码统一（import.default-password），BCrypt 加密后复用同一 hash（大批量导入性能考虑）
  */
+@Slf4j
 @Service
 public class UserImportExportServiceImpl implements UserImportExportService {
 
@@ -109,17 +114,33 @@ public class UserImportExportServiceImpl implements UserImportExportService {
 
         // 2. 流式解析（SAX 模式，不落盘）
         List<UserImportRow> rows = new ArrayList<>();
+        UserImportListener listener = new UserImportListener(rows);
         try (InputStream in = file.getInputStream()) {
             EasyExcel.read(in)
                     .head(UserImportRow.class)
-                    .registerReadListener(new UserImportListener(rows))
+                    .registerReadListener(listener)
                     .sheet()
                     .doRead();
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
+            // 不回显 e.getMessage()：EasyExcel/POI 的异常原文是英文实现细节
+            //（如 BigDecimal 的 "Character a is neither a decimal digit..."），既无助于用户
+            // 定位、又泄漏内部实现；细节只留在服务端日志（docs/question-list #17）
+            log.error("Excel 导入解析失败", e);
             throw new BusinessException(ResultCode.IMPORT_VALIDATE_FAILED.getCode(),
-                    "Excel 文件解析失败，请检查文件内容：" + e.getMessage());
+                    "Excel 文件解析失败，请检查文件内容或格式；若表格中含公式等特殊单元格，请先粘贴为值后重试");
+        }
+
+        // 2.1 公式单元格显式拒绝：EasyExcel 只取公式的**缓存值**（不带缓存值时整格读成 null），
+        // 单看数据行无法发现公式；但 ReadCellData 保留了 FormulaData，可据此逐格定位并拒绝。
+        // 必须在解析阶段单独收集（而不是混进行校验）：公式无缓存值所在的行映射出来可能就是
+        // 全空行，会被常规校验静默跳过（docs/question-list #24）
+        if (!listener.getFormulaErrors().isEmpty()) {
+            ImportResult failed = new ImportResult();
+            failed.setSuccessCount(0);
+            failed.setErrors(listener.getFormulaErrors());
+            return failed;
         }
 
         // 3. 数据量校验
@@ -176,14 +197,22 @@ public class UserImportExportServiceImpl implements UserImportExportService {
                     ? row.getNickname().trim() : UserConstants.defaultNickname(row.getEmail().trim()));
             user.setStatus(resolveStatus(row.getStatus()));
             // 整批共用同一个公开口令（defaultPassword），必须强制首次改密——否则等于批量签发
-            // 已知口令的账号（docs/question-list/01 #4）。
+            // 已知口令的账号（docs/question-list #4）。
             // 注意本值必须由 UserMapper.insertBatch 的列清单承载：那是一条手写的
             // INSERT ... VALUES <foreach>，列清单里没有这一列就会**静默取 DB 默认 0**，
             // 整条闸对导入账号永不生效且零报错。
             user.setMustChangePassword(Boolean.TRUE);
             users.add(user);
         }
-        userMapper.insertBatch(users);
+        try {
+            userMapper.insertBatch(users);
+        } catch (DuplicateKeyException e) {
+            // 校验快照与批量插入之间的并发窗口（双击导入 / 导入与注册并发撞同一邮箱）：
+            // uk_email 兜住了一致性（事务整体回滚，不留半批数据），但异常直穿会变成 body 500。
+            // 与注册/建号的兜底同源（docs/question-list #27 的同族路径），映射为导入校验失败
+            throw new BusinessException(ResultCode.IMPORT_VALIDATE_FAILED.getCode(),
+                    "导入失败：存在与库中冲突的邮箱（可能为并发导入或并发注册），请刷新后重试");
+        }
 
         Map<String, User> userByEmail = userMapper.selectList(
                         new LambdaQueryWrapper<User>().in(User::getEmail, emails))
@@ -350,18 +379,30 @@ public class UserImportExportServiceImpl implements UserImportExportService {
     }
 
     /**
-     * EasyExcel 读取监听器：收集数据行并记录 Excel 行号，跳过全空行
+     * EasyExcel 读取监听器：收集数据行并记录 Excel 行号，跳过全空行；同时探测公式单元格。
      */
     private static class UserImportListener implements ReadListener<UserImportRow> {
 
         private final List<UserImportRow> rows;
 
+        /** 公式单元格错误（含行列坐标），解析阶段即可定位；由调用方决定是否整批拒绝 */
+        private final List<String> formulaErrors = new ArrayList<>();
+
         UserImportListener(List<UserImportRow> rows) {
             this.rows = rows;
         }
 
+        List<String> getFormulaErrors() {
+            return formulaErrors;
+        }
+
         @Override
         public void invoke(UserImportRow data, AnalysisContext context) {
+            // rowIndex 为 0-based 物理行索引（表头为 0，数据行从 1 起），Excel 行号 = rowIndex + 1
+            int rowNum = context.readRowHolder().getRowIndex() + 1;
+            // 公式检查刻意先于「跳过全空行」：公式没有缓存值时整格读成 null，所在行可能
+            // 被判为全空行而直接丢弃——公式就此静默消失，没有任何报错（docs/question-list #24）
+            collectFormulaErrors(context, rowNum);
             if (data == null
                     || (!StringUtils.hasText(data.getEmail())
                     && !StringUtils.hasText(data.getNickname())
@@ -369,9 +410,27 @@ public class UserImportExportServiceImpl implements UserImportExportService {
                     && !StringUtils.hasText(data.getRoleCodes()))) {
                 return; // 跳过全空行
             }
-            // rowIndex 为 0-based 物理行索引（表头为 0，数据行从 1 起），Excel 行号 = rowIndex + 1
-            data.setRowNum(context.readRowHolder().getRowIndex() + 1);
+            data.setRowNum(rowNum);
             rows.add(data);
+        }
+
+        /**
+         * 逐格探测公式：EasyExcel 的 {@code ReadCellData} 保留了公式标记
+         * {@code FormulaData}（即 xlsx 里 {@code <f>} 标签的内容）——它与「有没有缓存值」
+         * 无关，是唯一能区分「公式结果」与「用户手工输入值」的可靠依据。
+         */
+        private void collectFormulaErrors(AnalysisContext context, int rowNum) {
+            Map<Integer, Cell> cellMap = context.readRowHolder().getCellMap();
+            if (cellMap == null || cellMap.isEmpty()) {
+                return;
+            }
+            for (Map.Entry<Integer, Cell> entry : cellMap.entrySet()) {
+                if (entry.getValue() instanceof ReadCellData<?> cell && cell.getFormulaData() != null) {
+                    // 列号转 1-based 展示（对齐 Excel 里的列序习惯）
+                    formulaErrors.add("第 " + rowNum + " 行：第 " + (entry.getKey() + 1)
+                            + " 列包含公式，请先将公式粘贴为值后重新导入");
+                }
+            }
         }
 
         @Override

@@ -85,7 +85,7 @@ public final class CaptchaRedisKeys {
      *
      * <p><b>反例记录</b>：早期注释断言「邮箱在库中是按原样存储与比较的，故不折叠」——
      * 该前提不成立，已因此产生「邮箱大小写不一致时改密验证码通道永久失效」的缺陷
-     * （docs/question-list/01 #20，修复见 03 #20）。改这里之前请先确认库的 collation 语义，
+     * （docs/question-list #20）。改这里之前请先确认库的 collation 语义，
      * 不要照抄旧注释的推理。
      */
     public static String normalizeEmail(String email) {

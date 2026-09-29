@@ -33,7 +33,7 @@ public class RbacCacheProperties {
      * 而启动、登录、查询全部正常、**一条日志都不打**，属于"性能掉一个量级却无从察觉"的故障。
      *
      * <p>本类此前是三个配置类里唯一没有启动期校验的（另两个是 {@code AuthSessionProperties}
-     * 与 {@code CaptchaProperties}），见 docs/question-list/01 #29。
+     * 与 {@code CaptchaProperties}），见 docs/question-list #29。
      * 想临时验证"关掉缓存"的行为请用 {@code enabled: false}，而不是把 TTL 调到极小。
      */
     @AssertTrue(message = "qsx.rbac-cache 配置不合法：ttl 须 ≥ 1 分钟"

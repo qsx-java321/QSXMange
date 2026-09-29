@@ -22,6 +22,7 @@ import com.qsx.web.dto.request.MenuCreateRequest;
 import com.qsx.web.dto.request.MenuUpdateRequest;
 import com.qsx.web.vo.PermissionVO;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -65,7 +66,11 @@ public class PermissionServiceImpl implements PermissionService {
         LambdaQueryWrapper<Permission> wrapper = new LambdaQueryWrapper<Permission>()
                 .like(StringUtils.hasText(query.getCode()), Permission::getCode, query.getCode())
                 .like(StringUtils.hasText(query.getName()), Permission::getName, query.getName())
-                .orderByAsc(Permission::getSort);
+                // id 作 tiebreaker：sort 相同的行只按 sort 排序是非全序，跨页顺序不稳定
+                // （翻页可能重复/漏行）；与 getUserMenuTree/selectAll 的写法保持一致
+                //（docs/question-list #38）
+                .orderByAsc(Permission::getSort)
+                .orderByAsc(Permission::getId);
 
         Page<Permission> page = permissionMapper.selectPage(
                 new Page<>(query.getPageNum(), query.getPageSize()), wrapper);
@@ -116,7 +121,14 @@ public class PermissionServiceImpl implements PermissionService {
         permission.setIcon(request.getIcon());
         permission.setVisible(request.getVisible() == null ? 1 : request.getVisible());
         permission.setSort(request.getSort() == null ? 0 : request.getSort());
-        permissionMapper.insert(permission);
+        try {
+            permissionMapper.insert(permission);
+        } catch (DuplicateKeyException e) {
+            // 判重与插入之间的并发窗口（双击/并发建菜单）：uk_perm_code 兜住了一致性，
+            // 但异常直穿会变成 body 500「系统繁忙」。映射回与判重一致的业务码
+            //（docs/question-list #27）
+            throw new BusinessException(ResultCode.PERMISSION_CODE_EXISTS);
+        }
         return PermissionVO.from(permission);
     }
 

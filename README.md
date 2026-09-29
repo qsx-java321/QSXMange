@@ -12,7 +12,7 @@
 - **初始口令必须首次改密**：预置超管 / Excel 导入 / 后台建号三类账号落库即带
   `must_change_password` 标记，改密前只能访问 `/auth/**`（业务码 1037）——
   公开的初始口令因此不会长期有效。
-- 248 例自动化集成测试 + 真实 HTTP 逐笔记录锁定行为（详见[测试报告](docs/test/项目测试报告.md)）。
+- 257 例自动化集成测试 + 真实 HTTP 逐笔记录锁定行为（详见[测试报告](docs/test/项目测试报告.md)）。
 
 ## 技术栈
 
@@ -103,7 +103,7 @@ curl -X POST http://localhost:8080/auth/login \
 ### 5. 运行测试
 
 ```bash
-mvn test                                                                 # 全量 248 例
+mvn test                                                                 # 全量 257 例
 mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false  # 单个类（该参数必带）
 ```
 
@@ -165,7 +165,7 @@ mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false  # 单个
 | 文档 | 定位 |
 | :--- | :--- |
 | [docs/design/](docs/design/) | **详细设计文档**：架构与模块划分 · 认证与会话 · 授权与 RBAC · 邮箱验证码 · 业务功能与保护矩阵 · 基础设施、审计与测试 |
-| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 测试总报告：36 接口覆盖矩阵、自动化基线（当轮快照 204 例，现 248 例）、真实 HTTP 逐笔明细；分域明细见同目录 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道` |
-| [docs/question-list/](docs/question-list/) | **工程化待办清单**：#1–#40 问题、搁置项与反悔记录、当前修复方案、实测记录与核验方法 |
+| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 测试总报告：36 接口覆盖矩阵、自动化基线（当轮快照 204 例，现 257 例）、真实 HTTP 逐笔明细；分域明细见同目录 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道` |
+| [docs/question-list/](docs/question-list/) | **问题清单（单文档）**：#1–#40 完整列表（已修复 / 主动搁置 / 已撤销）、搁置与撤销理由、防复踩记录（2026-09-30 待修项已清零） |
 | [docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md](docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md) | 全项目主线总览（发展阶段、跨阶段决策与教训） |
 | [docs/dev-env/组件依赖README.md](docs/dev-env/组件依赖README.md) | Docker 中间件清单与启停（MySQL / Redis / Mailpit 等） |
