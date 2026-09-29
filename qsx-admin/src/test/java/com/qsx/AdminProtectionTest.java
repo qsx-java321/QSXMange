@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.qsx.common.constant.PermissionConstants;
 import com.qsx.domain.entity.Permission;
 import com.qsx.domain.entity.Role;
+import com.qsx.domain.entity.UserRole;
 import com.qsx.mapper.PermissionMapper;
 import com.qsx.security.session.AuthRedisKeys;
 import org.junit.jupiter.api.AfterEach;
@@ -45,6 +46,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 「ADMIN 角色已被停用」的状态，以单独验证第二道闸——这正是纵深防御要防的场景。
  * 每个用例结束都无条件把角色恢复为启用（见 {@link #restoreAdminRoleStatus()}），
  * 避免污染其它用例与本地开发库。
+ *
+ * <h3>第三道闸：角色绑定不可被架空（1033）</h3>
+ * 2026-09 补齐：{@code assignRoles} 是此前唯一<b>零保护</b>的生命周期入口——持有
+ * {@code user:assign-role} 者可把内置超管的 ADMIN 角色整表清空（架空超管），
+ * 也能给自己绑 ADMIN。现由 {@code ADMIN_USER_ROLE_IMMUTABLE(1033)} 拦截：
+ * 目标一旦持有 ADMIN，其角色绑定对任何操作者都不可修改（与 1020/1021/1025 同源判定）。
+ * 相关用例见本类「第三道闸」小节。
+ *
+ * <p><b>注意本类的构造约束</b>：这条闸同时封死了测试里「先授 ADMIN、再换成普通角色」的
+ * 造数路径（{@link #nonAdminOperatorCannotDeleteSuperAdminWhenAdminRoleDisabled()} 因此改为
+ * 「操作者从始至终不是超管」的等价构造）。新增用例不要再依赖"能给超管改角色"。
  */
 class AdminProtectionTest extends BaseIntegrationTest {
 
@@ -149,6 +161,28 @@ class AdminProtectionTest extends BaseIntegrationTest {
 
     private String uniqueRoleCode() {
         return "test-role-" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+    }
+
+    /** 调用 PUT /api/users/{id}/roles 并返回业务码（roleIdsJson 已是 JSON 数组文本，如 "[1,2]"、"[]"） */
+    private int callAssignRoles(String token, long userId, String roleIdsJson) throws Exception {
+        MvcResult result = mockMvc.perform(put("/api/users/" + userId + "/roles")
+                        .header("Authorization", bearerHeader(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"roleIds\":" + roleIdsJson + "}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        return bodyCode(result);
+    }
+
+    /** 目标用户的角色关联行数（机制层断言用） */
+    private long relationCountOf(long userId) {
+        return userRoleMapper.selectCount(
+                new LambdaQueryWrapper<UserRole>().eq(UserRole::getUserId, userId));
+    }
+
+    /** 权限缓存键（与 PermissionCacheServiceImpl.KEY_PREFIX 一致；同 RbacCacheTest 的做法） */
+    private String permissionCacheKey(long userId) {
+        return "qsx:auth:perm:" + userId;
     }
 
     // ================== 第一道闸：接口拦截 ==================
@@ -301,12 +335,16 @@ class AdminProtectionTest extends BaseIntegrationTest {
     void nonAdminOperatorCannotDeleteSuperAdminWhenAdminRoleDisabled() throws Exception {
         AdminSession target = newAdmin("admin-target");
 
-        // 操作者：先用超管身份建好「仅带 user:delete」的自定义角色，再把角色换成它——
-        // 其权限来源与 ADMIN 角色无关，因此不会随 ADMIN 角色停用而消失。
-        // 这正是真实攻击路径：能把 ADMIN 角色弄停用的人，必定另有权限来源
-        AdminSession operator = newAdmin("admin-operator");
-        long roleId = createRole(operator.token(), uniqueRoleCode());
-        assignPermissions(operator.token(), roleId, permIdByCode(PermissionConstants.USER_DELETE));
+        // 操作者从始至终不是超管：其权限只来自「仅带 user:delete」的自定义角色，
+        // 因此不会随 ADMIN 角色停用而消失。这正是真实攻击路径——能把 ADMIN 角色
+        // 弄停用的人，必定另有权限来源。
+        // 注意：这里不能再用「先授 ADMIN、再把角色换成它」的老构造——那条路径已被
+        // 「内置超管用户的角色不可修改（1033）」封死，见下面的第三道闸小节。
+        String setupToken = adminToken();
+        long roleId = createRole(setupToken, uniqueRoleCode());
+        assignPermissions(setupToken, roleId, permIdByCode(PermissionConstants.USER_DELETE));
+
+        LoginSession operator = loginGetAuth(uniqueEmail("operator"), "abc123");
         userService.assignRoles(operator.userId(), List.of(roleId));
 
         disableAdminRoleInDb();
@@ -318,5 +356,89 @@ class AdminProtectionTest extends BaseIntegrationTest {
 
         assertThat(bodyCode(result)).isEqualTo(1025);
         assertThat(userMapper.selectById(target.userId())).isNotNull();
+        assertThat(relationCountOf(target.userId()))
+                .as("保护发生在删除之前，目标的 ADMIN 关联原样保留")
+                .isEqualTo(1);
+    }
+
+    // ================== 第三道闸：内置超管用户的角色绑定不可修改（1033） ==================
+
+    @Test
+    @DisplayName("给内置超管改角色被拒（1033），原 ADMIN 关联既不被删也不被换")
+    void adminUserRolesImmutable() throws Exception {
+        String actor = adminToken();
+        AdminSession target = newAdmin("admin-target");
+        long otherRole = createRole(actor, uniqueRoleCode());
+
+        assertThat(callAssignRoles(actor, target.userId(), "[" + otherRole + "]")).isEqualTo(1033);
+
+        // 机制层：拦截必须发生在整表替换之前——只断言业务码的话，
+        // 一个「先删旧关联再报错」的实现也能骗过测试
+        assertThat(relationCountOf(target.userId())).isEqualTo(1);
+        assertThat(userRoleMapper.selectList(new LambdaQueryWrapper<UserRole>()
+                        .eq(UserRole::getUserId, target.userId())))
+                .extracting(UserRole::getRoleId)
+                .containsExactly(adminRoleId());
+    }
+
+    @Test
+    @DisplayName("用空列表清空内置超管的角色同样被拒（1033）——架空超管的直接路径")
+    void adminUserRolesImmutableWhenCleared() throws Exception {
+        String actor = adminToken();
+        AdminSession target = newAdmin("admin-target");
+        // 预热目标的权限缓存：被拒的请求必须不产生任何副作用（含缓存抖动）
+        warmUpAuthorization(target.token());
+        assertThat(stringRedisTemplate.hasKey(permissionCacheKey(target.userId())))
+                .as("前置：目标权限缓存已按「持有 ADMIN」回填")
+                .isTrue();
+
+        assertThat(callAssignRoles(actor, target.userId(), "[]"))
+                .as("即便清空超管的角色被放行，超管也就此被架空——这是本闸要封的主路径")
+                .isEqualTo(1033);
+
+        assertThat(relationCountOf(target.userId())).isEqualTo(1);
+        assertThat(stringRedisTemplate.hasKey(permissionCacheKey(target.userId())))
+                .as("被拒的请求不应发布权限缓存失效事件")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("优先级：对超管传不存在的角色 id 也返回 1033（而非 1009）")
+    void adminUserRolesImmutableTakesPrecedenceOverRoleNotFound() throws Exception {
+        String actor = adminToken();
+        AdminSession target = newAdmin("admin-target");
+
+        assertThat(callAssignRoles(actor, target.userId(), "[99999999]"))
+                .as("闸在「校验目标角色均存在」之前：否则调用方会误以为换个角色 id 就能改超管")
+                .isEqualTo(1033);
+        assertThat(relationCountOf(target.userId())).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("ADMIN 角色被停用后，超管的角色绑定仍不可改（1033）——身份判定不过滤角色状态")
+    void adminUserRolesImmutableWhenAdminRoleDisabled() throws Exception {
+        String actor = adminToken();
+        // 先预热操作者权限缓存，再直接改库停用 ADMIN 角色（隔离被测路径，见 warmUpAuthorization）
+        warmUpAuthorization(actor);
+        AdminSession target = newAdmin("admin-target");
+
+        disableAdminRoleInDb();
+
+        assertThat(callAssignRoles(actor, target.userId(), "[]"))
+                .as("若身份判定误用 selectRoleCodes（带 status=0 过滤），此处会放行并架空超管")
+                .isEqualTo(1033);
+        assertThat(relationCountOf(target.userId())).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("正向：给普通用户授予 ADMIN 仍然放行（本闸只看目标）")
+    void assignRolesToNonAdminStillAllowed() throws Exception {
+        String actor = adminToken();
+        LoginSession target = loginGetAuth(uniqueEmail("plain-target"), "abc123");
+
+        // 本用例同时是一枚 tripwire：闸 2「授予 ADMIN 需操作者为超管」落地后，
+        // 这里的期望值必须从 200 改为 1034（见 docs/question-list/03 的错误码预分配）
+        assertThat(callAssignRoles(actor, target.userId(), "[" + adminRoleId() + "]")).isEqualTo(200);
+        assertThat(relationCountOf(target.userId())).isEqualTo(1);
     }
 }

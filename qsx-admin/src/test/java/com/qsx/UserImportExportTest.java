@@ -8,6 +8,7 @@ import com.qsx.web.dto.excel.UserImportRow;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MvcResult;
@@ -15,14 +16,17 @@ import org.springframework.test.web.servlet.MvcResult;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
+import java.util.UUID;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -56,10 +60,13 @@ class UserImportExportTest extends BaseIntegrationTest {
     @Test
     void importUsers_validRows_shouldPersistWithRoles() throws Exception {
         String token = adminToken();
+        // 角色码用自建普通角色，不能用 ADMIN——导入侧已禁止内置超管角色（见下两个用例）
+        String roleCode = uniqueRoleCode();
+        long roleId = createRole(token, roleCode);
         String email1 = uniqueEmail("imp1");
         String email2 = uniqueEmail("imp2");
         MockMultipartFile file = excelFile(List.of(
-                row(email1, "导入用户一", "0", "ADMIN"),
+                row(email1, "导入用户一", "0", roleCode),
                 row(email2, "", "", "")));
 
         mockMvc.perform(multipart("/api/users/import")
@@ -80,13 +87,61 @@ class UserImportExportTest extends BaseIntegrationTest {
         assertNotNull(u2);
         assertEquals(email2, u2.getNickname());
 
-        // 角色绑定：仅 email1 绑定了 ADMIN
+        // 角色绑定：仅 email1 绑定了该角色
         List<UserRole> rolesOfU1 = userRoleMapper.selectList(
                 new LambdaQueryWrapper<UserRole>().eq(UserRole::getUserId, u1.getId()));
         assertEquals(1, rolesOfU1.size());
-        assertEquals(adminRoleId(), rolesOfU1.get(0).getRoleId());
+        assertEquals(roleId, rolesOfU1.get(0).getRoleId());
         assertEquals(0, userRoleMapper.selectCount(
                 new LambdaQueryWrapper<UserRole>().eq(UserRole::getUserId, u2.getId())));
+    }
+
+    @Test
+    void importUsers_adminRoleCode_shouldRejectAll() throws Exception {
+        String token = adminToken();
+        String badEmail = uniqueEmail("imp-admin");
+        String okEmail = uniqueEmail("imp-ok");
+        MockMultipartFile file = excelFile(List.of(
+                row(badEmail, "试图导入超管", "0", "ADMIN"),
+                row(okEmail, "合法行", "0", "")));
+
+        mockMvc.perform(multipart("/api/users/import")
+                        .file(file)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1017))
+                .andExpect(jsonPath("$.data.successCount").value(0))
+                .andExpect(jsonPath("$.data.errors.length()").value(1))
+                // 行号 = Excel 物理行号（表头为第 1 行，首个数据行是第 2 行）
+                .andExpect(jsonPath("$.data.errors[0]").value(containsString("第 2 行")))
+                .andExpect(jsonPath("$.data.errors[0]").value(containsString("内置超管角色")));
+
+        // 整批拒绝：含 ADMIN 的行与它后面的合法行都不落库。
+        // 注意不要断言"用户 email 不存在 ⇒ 角色关联也不存在"以外的东西——
+        // 测试超管自己就带一条 ADMIN 关联，按角色 id 计数会恒假
+        assertNull(userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getEmail, badEmail)));
+        assertNull(userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getEmail, okEmail)));
+    }
+
+    @Test
+    void importUsers_lowercaseAdminCode_shouldAlsoReject() throws Exception {
+        String token = adminToken();
+        String email = uniqueEmail("imp-admin-lc");
+        MockMultipartFile file = excelFile(List.of(row(email, "小写超管码", "0", "admin")));
+
+        mockMvc.perform(multipart("/api/users/import")
+                        .file(file)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1017))
+                // 大小写变体走的不是「禁止内置超管角色」那条闸，而是落到「角色编码不存在」：
+                // roleByCode 的键取自库中原样（ADMIN），而 HashMap 大小写敏感 ⇒ 查不到。
+                // 后果同样是整批拒绝，故此处只锁定"进不了库"这一事实。
+                // 切勿"顺手"把编码校验改成不区分大小写：取用阶段 roleByCode.get(code) 会返回 null 而 NPE
+                .andExpect(jsonPath("$.data.errors[0]").value(containsString("角色编码不存在")))
+                .andExpect(jsonPath("$.data.errors[0]").value(containsString("admin")));
+
+        assertNull(userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getEmail, email)));
     }
 
     @Test
@@ -220,6 +275,23 @@ class UserImportExportTest extends BaseIntegrationTest {
     }
 
     // ---------- 工具方法 ----------
+
+    /** 与基类清理口径一致的自建角色编码（BaseIntegrationTest 按 test- 前缀物理清理） */
+    private String uniqueRoleCode() {
+        return "test-role-" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+    }
+
+    /** 经 API 建一个自建角色，返回 roleId */
+    private long createRole(String token, String code) throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/roles")
+                        .header("Authorization", bearerHeader(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"" + code + "\",\"name\":\"导入测试角色-" + code + "\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString())
+                .path("data").path("id").asLong();
+    }
 
     private UserImportRow row(String email, String nickname, String status, String roleCodes) {
         UserImportRow r = new UserImportRow();

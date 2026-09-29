@@ -67,7 +67,12 @@ public enum ResultCode {
     CAPTCHA_ATTEMPT_EXCEEDED(1029, "验证码错误次数超限，请重新获取"),
     PASSWORD_NOT_MATCH(1030, "两次输入的密码不一致"),
     CHANGE_PASSWORD_CHANNEL_REQUIRED(1031, "修改密码需提供原密码或验证码之一"),
-    CAPTCHA_EMAIL_MISMATCH(1032, "该场景验证码仅限本人邮箱");
+    CAPTCHA_EMAIL_MISMATCH(1032, "该场景验证码仅限本人邮箱"),
+
+    // 内置资产不可破坏 (1033 起)：与 1011（内置角色不可删）/1026（内置角色不可停用）同一家族——
+    // 判定只看「目标是不是内置资产」，与操作者身份解耦；一旦拒绝，库中状态必须原样不动
+    // 1034 已预留给「授予 ADMIN 需操作者为超管」（docs/question-list/03 的闸 2，当前后置），请勿占用
+    ADMIN_USER_ROLE_IMMUTABLE(1033, "内置超管用户的角色不可修改");
 
     private final int code;
     private final String message;

@@ -241,6 +241,18 @@ public class UserServiceImpl implements UserService {
         if (userMapper.selectById(userId) == null) {
             throw new BusinessException(ResultCode.USER_NOT_FOUND);
         }
+        // 闸：内置超管用户的角色绑定不可被任何操作者修改——与「不可禁用(1020)/不可强制登出(1021)/
+        // 不可删除(1025)」对称，补上此前唯一零保护的生命周期入口。
+        // 传空列表「清空角色」同样被覆盖：本闸在整表替换之前、与 roleIds 内容无关。
+        // 身份判定走 isBuiltInAdmin → existsRoleCode（不过滤 sys_role.status），故 ADMIN 角色被停用后保护依然成立。
+        // 注意判定的是「目标是否持有 ADMIN」，不是「目标是否为预置账号」：因此任何自建超管也一视同仁，
+        // 想给超管换角色只能改库——这是与 1011/1026 同口径的有意设计。
+        // 错误码优先级：1004（用户不存在）→ 1033（目标超管）→ 1009（角色不存在）。本闸刻意排在
+        // 「校验目标角色均存在」之前：否则"对超管 + 传错角色 id"会返回 1009，让人误以为改个参数就能成功。
+        // 已知残留：existsRoleCode 是快照读，与并发写之间存在 check-then-act 窗口（见 question-list #27），本批不处理。
+        if (isBuiltInAdmin(userId)) {
+            throw new BusinessException(ResultCode.ADMIN_USER_ROLE_IMMUTABLE);
+        }
         // 校验目标角色均存在
         if (roleIds != null) {
             for (Long roleId : roleIds) {

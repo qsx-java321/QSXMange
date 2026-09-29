@@ -55,17 +55,27 @@ class RbacTest extends BaseIntegrationTest {
         return roleId;
     }
 
-    private void assignRoles(String token, long userId, long... roleIds) throws Exception {
+    /**
+     * 分配角色并返回<b>响应体业务码</b>。
+     *
+     * <p>刻意返回 body code 而不是只断 HTTP 200：业务异常也是 HTTP 200 + 非 200 业务码，
+     * 只断 HTTP 状态会让"被新闸门拦下"悄然变成"用例照旧通过"——2026-09 的「内置超管
+     * 角色不可改（1033）」落地时，本类就出现过这种假绿（重复分配的第 2 次被拦、
+     * 但断言仍成立）。调用点必须显式断言 200。
+     */
+    private int assignRoles(String token, long userId, long... roleIds) throws Exception {
         StringBuilder ids = new StringBuilder();
         for (int i = 0; i < roleIds.length; i++) {
             if (i > 0) ids.append(",");
             ids.append(roleIds[i]);
         }
-        mockMvc.perform(put("/api/users/" + userId + "/roles")
+        MvcResult result = mockMvc.perform(put("/api/users/" + userId + "/roles")
                         .header("Authorization", bearerHeader(token))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"roleIds\":[" + ids + "]}"))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString()).path("code").asInt();
     }
 
     private long userIdByEmail(String email) {
@@ -126,7 +136,7 @@ class RbacTest extends BaseIntegrationTest {
         // 建普通用户并绑定该角色
         String userEmail = uniqueEmail("rg-user");
         String userToken = registerAndLoginGetToken(userEmail, "abc123");
-        assignRoles(admin, userIdByEmail(userEmail), roleId);
+        assertThat(assignRoles(admin, userIdByEmail(userEmail), roleId)).isEqualTo(200);
 
         // 该用户能查用户列表（有 user:page）
         MvcResult users = mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(userToken)))
@@ -151,7 +161,7 @@ class RbacTest extends BaseIntegrationTest {
 
         String userEmail = uniqueEmail("inst-user");
         String userToken = registerAndLoginGetToken(userEmail, "abc123");
-        assignRoles(admin, userIdByEmail(userEmail), roleId);
+        assertThat(assignRoles(admin, userIdByEmail(userEmail), roleId)).isEqualTo(200);
 
         // 有权时访问成功
         mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(userToken)))
@@ -174,24 +184,28 @@ class RbacTest extends BaseIntegrationTest {
     @DisplayName("重复分配用户角色不产生重复关联")
     void assign_roles_idempotent() throws Exception {
         String admin = adminToken();
-        long adminRole = adminRoleId();
 
-        // 再建一个普通角色，重复分配两次
-        MvcResult created = createRole(admin, uniqueRoleCode());
-        long roleB = roleId(created);
+        // 两个自建普通角色，重复分配两次都要成功。
+        // 刻意不用 ADMIN 角色：目标一旦持有 ADMIN，「内置超管角色不可修改（1033）」会拒掉第 2 次调用，
+        // 用例就会从"验证整表替换可重复执行"退化成"验证第 1 次能成功"（见 helper 上的注释）
+        long roleA = roleId(createRole(admin, uniqueRoleCode()));
+        long roleB = roleId(createRole(admin, uniqueRoleCode()));
 
         String userEmail = uniqueEmail("idem-user");
         register(userEmail, "abc123");
         long userId = userIdByEmail(userEmail);
 
         for (int i = 0; i < 2; i++) {
-            assignRoles(admin, userId, adminRole, roleB);
+            assertThat(assignRoles(admin, userId, roleA, roleB))
+                    .as("第 %d 次整表替换", i + 1)
+                    .isEqualTo(200);
         }
 
         List<UserRole> rels = userRoleMapper.selectList(
                 new LambdaQueryWrapper<UserRole>().eq(UserRole::getUserId, userId));
         // 整表替换后仅 2 条关联，无重复
         assertThat(rels).hasSize(2);
+        assertThat(rels).extracting(UserRole::getRoleId).containsExactlyInAnyOrder(roleA, roleB);
     }
 
     // ---------- 标识不可变 ----------

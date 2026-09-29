@@ -4,6 +4,7 @@ import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.read.listener.ReadListener;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.qsx.common.constant.RoleConstants;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.common.result.ResultCode;
 import com.qsx.domain.entity.Role;
@@ -290,6 +291,16 @@ public class UserImportExportServiceImpl implements UserImportExportService {
 
         if (StringUtils.hasText(row.getRoleCodes())) {
             for (String code : row.getRoleCodes().split(",")) {
+                // 闸：内置超管角色禁止出现在导入行。导入的初始口令是配置里的公开口令
+                // （import.default-password），放进 ADMIN 等同于批量签发已知口令的超管账号。
+                // 放在「编码不存在」判断之前：本判断不依赖库中数据，ADMIN 角色即使被停用/删除也照样拦得住。
+                // 大小写变体（如 "admin"）不从此处拦截，而是落到下面的「编码不存在」——因为 roleByCode 的键
+                // 取自库中原样（ADMIN），而 HashMap 大小写敏感。后果同样是 1017 整批拒绝，见测试注释：
+                // 不要"顺手"把下面的校验改成不区分大小写，那会让取用时的 roleByCode.get(code) 返回 null 而 NPE。
+                if (RoleConstants.ADMIN.equals(code.trim())) {
+                    errors.add("第 " + row.getRowNum() + " 行：禁止将内置超管角色分配给导入用户");
+                    break; // 该行只报一次，沿用既有「角色码一行一错」语义
+                }
                 if (StringUtils.hasText(code.trim()) && !roleByCode.containsKey(code.trim())) {
                     errors.add("第 " + row.getRowNum() + " 行：角色编码不存在：" + code.trim());
                     break;
