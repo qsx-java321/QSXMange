@@ -49,4 +49,4 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 本项目约定：**实施类计划文档在功能交付后归档删除**（内容并入本目录的设计文档与会话总结），
 历史版本可在 git 记录中查到。当前仓库内不再保留计划稿；若要追溯「验证码功能」从计划到落地的
 完整过程，见 `docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md` 阶段 13~15 与
-`docs/test/项目测试报告.md` §九。
+`docs/test/02-邮箱验证码.md`。

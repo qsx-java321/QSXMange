@@ -132,13 +132,16 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 
 `SessionLuaTest` 是唯一直连会话层的测试（不经 HTTP），覆盖原子性、并发双花、清理完整性——**改动 Lua 脚本后必须让它全绿**。
 
-**36 个接口 ↔ 测试类的对应关系见 `docs/test/项目测试报告.md` §1.4 覆盖矩阵（验证码轮次见 §九）。** 新增接口须同步补测试：鉴权正反向、业务码矩阵、边界（401/403、越权、不存在）、以及机制层断言（该落库的落库、该清的键要清）。全部测试类：认证会话 `AuthControllerTest` / `AuthRefreshTest` / `AuthSessionTest` / `SecurityAccessTest` / `SessionLuaTest`，用户 `UserControllerTest` / `UserEdgeTest` / `UserKickTest` / `UserImportExportTest`，角色权限 `RoleTest` / `PermissionTest` / `RbacTest` / `RbacCacheTest` / `RbacCacheDisabledTest` / `AdminProtectionTest`，菜单日志 `MenuTest` / `LogTest`，邮箱验证码 `CaptchaTest` / `ForgotPasswordTest` / `ChangePasswordChannelTest` / `CaptchaMailSmokeTest`（Mailpit 未启动时 `assumeTrue` 跳过），改造回归 `RefactorRegressionTest`，全链路 `BusinessFlowTest`。
+**36 个接口 ↔ 测试类的对应关系见 `docs/test/项目测试报告.md` 的「四、结果汇总与覆盖矩阵」（分域明细见同目录 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道`）。** 新增接口须同步补测试：鉴权正反向、业务码矩阵、边界（401/403、越权、不存在）、以及机制层断言（该落库的落库、该清的键要清）。全部测试类：认证会话 `AuthControllerTest` / `AuthRefreshTest` / `AuthSessionTest` / `SecurityAccessTest` / `SessionLuaTest`，用户 `UserControllerTest` / `UserEdgeTest` / `UserKickTest` / `UserImportExportTest`，角色权限 `RoleTest` / `PermissionTest` / `RbacTest` / `RbacCacheTest` / `RbacCacheDisabledTest` / `AdminProtectionTest`，菜单日志 `MenuTest` / `LogTest`，邮箱验证码 `CaptchaTest` / `ForgotPasswordTest` / `ChangePasswordChannelTest` / `CaptchaMailSmokeTest`（Mailpit 未启动时 `assumeTrue` 跳过），改造回归 `RefactorRegressionTest`，全链路 `BusinessFlowTest`。
 
 ## 文档索引
 
 - `README.md`：项目概览与上手（技术栈、功能一览、模块结构、快速开始、接口速览、常用错误码）
 - `docs/design/`：**详细设计文档**——`README.md`（索引）· `01-架构与模块划分` · `02-认证与会话` · `03-授权与RBAC` · `04-邮箱验证码` · `05-业务功能与保护矩阵` · `06-基础设施、审计与测试`。
-  **改代码前先读对应那一篇**；`05` 的 §7 是已知缺口清单（本地阶段有意搁置的问题都在那里）。
+  **改代码前先读对应那一篇**；`05` 的 §7 是**设计级**已知缺口清单（本地阶段有意搁置的问题都在那里）。
   约定：实施类计划文档在功能交付后归档删除（内容并入设计文档与会话总结，历史见 git 记录）。
-- `docs/test/项目测试报告.md`：**全项目测试总报告**（六轮合并：36 接口覆盖矩阵、204 例自动化基线、230 条真实 HTTP 逐接口明细、累计 16 处产品缺陷与 7 项观察项、环境清理验收）；验证码轮次见 §九、注册/登录/验证码专项轮次见 §十，原始请求/响应见同目录 `项目测试报告.json`
+- `docs/question-list/`：**工程化待办的跟踪文档（唯一入口）**——`README.md`（阅读前提/严重度口径/编号冻结规则）· `01-问题清单`（#1–#40，逐条标证据分级与「本地可复现」）· `02-主动放弃与搁置清单`（含反悔记录）· `03-修复方案-当前修复范围` · `04-待修复问题清单-后续` · `05-实测记录与核验方法`。
+  **编号 #1–#40 已冻结，不得重排或复用**（被 05 §7、测试报告 §六 引用）；新增从 #41 起；撤销的项保留编号只改状态。
+  动手修任何一条之前，先读对应位置的**当前源码**——该目录读取规则是「只是草稿，代码才是真相」。
+- `docs/test/项目测试报告.md`：**全项目测试总报告**（总览 + 按业务域拆分的 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道`：36 接口覆盖矩阵、204 例自动化基线、真实 HTTP 逐接口明细、环境清理验收）；原始请求/响应明细随总览精简已移除（历史见 git 记录）
 - `docs/session-notes/qsxmanager/`：`会话总结-qsxmanager全项目.md` 是**主线总览**（阶段脉络、设计约束与有意取舍）；单次会话的详细复盘写 `会话总结-<主题>-<日期>.md` 增量文件（如 `会话总结-验证码功能实施与文档重构-20260927.md`），总总结只保留主线并指向它们。早期增量总结已合并删除，早期测试细节已并入 `docs/test/项目测试报告.md`

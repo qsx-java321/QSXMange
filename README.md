@@ -144,6 +144,7 @@ mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false  # 单个
 | 文档 | 定位 |
 | :--- | :--- |
 | [docs/design/](docs/design/) | **详细设计文档**：架构与模块划分 · 认证与会话 · 授权与 RBAC · 邮箱验证码 · 业务功能与保护矩阵 · 基础设施、审计与测试 |
-| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 测试总报告：36 接口覆盖矩阵、204 例基线、230 条真实 HTTP 逐笔明细（R1~R6，含注册/登录/验证码专项轮次 §十） |
+| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 测试总报告：36 接口覆盖矩阵、204 例基线、真实 HTTP 逐笔明细；分域明细见同目录 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道` |
+| [docs/question-list/](docs/question-list/) | **工程化待办清单**：#1–#40 问题、搁置项与反悔记录、当前修复方案、实测记录与核验方法 |
 | [docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md](docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md) | 全项目主线总览（发展阶段、跨阶段决策与教训） |
 | [docs/dev-env/组件依赖README.md](docs/dev-env/组件依赖README.md) | Docker 中间件清单与启停（MySQL / Redis / Mailpit 等） |
