@@ -2,6 +2,7 @@ package com.qsx.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.qsx.common.constant.RoleConstants;
 import com.qsx.common.exception.BusinessException;
 import com.qsx.framework.result.PageResult;
 import com.qsx.common.result.ResultCode;
@@ -35,8 +36,14 @@ import java.util.stream.Collectors;
 @Service
 public class RoleServiceImpl implements RoleService {
 
-    /** 内置超管编码，禁止删除 / 禁止停用 */
-    private static final String BUILT_IN_ADMIN_CODE = "ADMIN";
+    /**
+     * 内置超管编码，禁止删除 / 禁止停用 / 禁止改其权限绑定。
+     *
+     * <p>必须取自 {@link RoleConstants#ADMIN} 而非字面量：1011/1026/1036 与本项目其它
+     * 超管判定（{@code UserServiceImpl.isBuiltInAdmin}、导入侧的闸）都要收敛到同一个真源，
+     * 否则改了常量会出现"某几道闸跟着变、另几道不跟着变"的不对称保护。
+     */
+    private static final String BUILT_IN_ADMIN_CODE = RoleConstants.ADMIN;
 
     /**
      * 状态「非 0 即停用」。
@@ -164,7 +171,18 @@ public class RoleServiceImpl implements RoleService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void assignPermissions(Long roleId, List<Long> permissionIds) {
-        getRole(roleId);
+        Role role = getRole(roleId);
+        // 闸：内置超管角色的权限绑定不可整体替换——与 1011（不可删）/ 1026（不可停用）对称，
+        // 同一判定源、同一理由：清空 ADMIN 的权限后，所有"仅经 ADMIN 取权"的账号立刻失去全部权限，
+        // **连恢复所需的 role:assign 一起消失**，而角色仍启用、code 不可改（1024）、不可删不可停
+        // ⇒ 只能改库。它比删角色/停角色更隐蔽：管理端「编辑 ADMIN 角色 → 保存」即可触发。
+        // 幂等重存（传当前同一集合）同样拒绝：判定只看目标角色身份，不看请求内容。
+        // 位置在 getRole 之后、反查受影响用户之前：保证被拒的请求不产生任何副作用
+        //（不跑 N 行 DISTINCT 查询、不动关联表、更不会发布 AFTER_COMMIT 的缓存失效事件——
+        //  否则"拒绝了却顺手清掉全站超管的权限缓存"，一旦监听器改成非事务绑定就会成真）。
+        if (BUILT_IN_ADMIN_CODE.equals(role.getCode())) {
+            throw new BusinessException(ResultCode.ADMIN_ROLE_PERMISSION_IMMUTABLE);
+        }
         // 校验目标权限均存在
         if (permissionIds != null) {
             for (Long permId : permissionIds) {

@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -440,8 +441,56 @@ class RoleTest extends BaseIntegrationTest {
         assertThat(permissionCount(roleId)).isEqualTo(1);
     }
 
-    // ---------- 授权即时生效 ----------
+    // ---------- 内置超管角色的权限绑定不可修改（1036） ----------
 
+    @Test
+    @DisplayName("改内置超管角色的权限被拒 1036：清空与重存都拒绝，且绑定与恢复能力原样保留")
+    void admin_role_permissions_immutable_1036() throws Exception {
+        String token = adminToken();
+        long adminRoleId = adminRoleId();
+        long before = permissionCount(adminRoleId);
+        assertThat(before).as("前置：内置超管角色本就被绑定全量权限").isPositive();
+
+        // 清空：连恢复所需的 role:assign 一起消失，系统只能改库——本闸要封的主路径
+        assertThat(codeOf(assignPermissions(token, adminRoleId))).isEqualTo(1036);
+        // 幂等重存（传一份合法子集）同样拒绝：判定只看目标角色身份，不看请求内容
+        assertThat(codeOf(assignPermissions(token, adminRoleId, permIdByCode("role:page")))).isEqualTo(1036);
+
+        // 机制层：拦截必须发生在整表替换之前——只断言业务码的话，
+        // 一个「先删旧关联再报错」的实现也能骗过测试，而超管已被架空
+        assertThat(permissionCount(adminRoleId)).isEqualTo(before);
+        assertThat(body(mockMvc.perform(get("/api/roles/" + adminRoleId)
+                        .header("Authorization", bearerHeader(token)))
+                .andExpect(status().isOk()).andReturn())
+                .path("data").path("permissionIds").toString())
+                .as("恢复能力（role:assign）必须仍在超管角色的绑定里")
+                .contains(String.valueOf(permIdByCode("role:assign")));
+    }
+
+    @Test
+    @DisplayName("机制层：对内置超管角色的权限请求被拒后不发布缓存失效（不产生无谓的全站抖动）")
+    void admin_role_permissions_immutable_noCacheEvict() throws Exception {
+        String operator = adminToken();
+        // 造一个持有 ADMIN 的用户并预热其权限缓存
+        LoginSession superAdmin = loginGetAuth(uniqueEmail("warm"), "abc123");
+        userService.assignRoles(superAdmin.userId(), List.of(adminRoleId()));
+        mockMvc.perform(get("/api/users").header("Authorization", bearerHeader(superAdmin.token())))
+                .andExpect(status().isOk());
+        String cacheKey = PERM_CACHE_PREFIX + superAdmin.userId();
+        assertThat(stringRedisTemplate.hasKey(cacheKey)).as("前置：权限缓存已按持有 ADMIN 回填").isTrue();
+        long before = permissionCount(adminRoleId());
+
+        // 传的是合法权限 id，唯一的拒绝理由就是「目标是内置超管角色」
+        assertThat(codeOf(assignPermissions(operator, adminRoleId(), permIdByCode("role:page"))))
+                .isEqualTo(1036);
+
+        assertThat(stringRedisTemplate.hasKey(cacheKey))
+                .as("闸在 publishEvent 之前：被拒的请求不该让全站超管的缓存白失效一次")
+                .isTrue();
+        assertThat(permissionCount(adminRoleId())).isEqualTo(before);
+    }
+
+    // ---------- 授权即时生效 ----------
     @Test
     @DisplayName("停用角色后其用户权限立即失效（缓存被精确清除）")
     void disable_role_revokes_permission_immediately() throws Exception {
