@@ -59,8 +59,6 @@ public final class PermissionConstants {
 
     /** 菜单类型（对应 sys_permission.type） */
     public static final String TYPE_MENU = "MENU";
-    /** 按钮权限类型（对应 sys_permission.type） */
-    public static final String TYPE_PERMISSION = "PERMISSION";
 
     /**
      * 系统内置 code 集合：init.sql 预置的 23 个权限码 + 6 个菜单入口码 = <b>29</b>。

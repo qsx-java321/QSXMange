@@ -21,13 +21,11 @@ public final class UserConstants {
     /** 昵称列宽（{@code sys_user.nickname VARCHAR(50)}） */
     public static final int NICKNAME_MAX = 50;
 
-    /** 删除时改写邮箱的固定后缀长度：{@code "#deleted_"}（9 字符）+ 毫秒时间戳（13 位） */
-    public static final int DELETED_EMAIL_SUFFIX_LENGTH = 22;
-
     /**
      * 邮箱长度上限（{@code sys_user.email VARCHAR(128)}）。
      *
-     * <p>取值必须满足 {@code EMAIL_MAX + DELETED_EMAIL_SUFFIX_LENGTH ≤ 128}：
+     * <p>取值必须满足 {@code EMAIL_MAX + 22 ≤ 128}（22 = 删除后缀固定长度：
+     * {@code "#deleted_"} 9 字符 + 毫秒时间戳 13 位）：
      * 逻辑删除会用「原邮箱 + 22 字符后缀」释放唯一索引，留不够余量就会让
      * {@code DELETE /api/users/{id}} 在改写那一步 500，账号从此删不掉。
      * 理论边界是 106，此处取 100 是给后缀格式的微调留 6 字符余量——

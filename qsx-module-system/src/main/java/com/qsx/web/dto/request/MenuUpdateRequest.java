@@ -23,8 +23,8 @@ public class MenuUpdateRequest {
     private String name;
 
     /**
-     * 类型取值白名单：与 {@link com.qsx.common.constant.PermissionConstants} 的
-     * {@code TYPE_MENU}/{@code TYPE_PERMISSION} 同步（注解写不了常量）。
+     * 类型取值白名单为 {@code MENU}/{@code PERMISSION} 两个字面量，其中 {@code MENU} 与
+     * {@link com.qsx.common.constant.PermissionConstants#TYPE_MENU} 同值。
      * 修改路径此前完全无约束，填错会让菜单树按 {@code type == "MENU"} 过滤时静默失配。
      * 注意与 {@link MenuCreateRequest} 的差别：新增留空表示取默认 MENU，修改为必填。
      */

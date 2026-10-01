@@ -13,7 +13,6 @@ public enum ResultCode {
 
     // 参数校验 (400)
     BAD_REQUEST(400, "请求参数错误"),
-    VALIDATE_FAILED(400, "参数校验失败"),
 
     // 认证授权 (401/403)
     UNAUTHORIZED(401, "未登录或登录已过期"),
@@ -24,10 +23,7 @@ public enum ResultCode {
     EMAIL_OR_PASSWORD_ERROR(1002, "邮箱或密码错误"),
     USER_DISABLED(1003, "账号已被禁用"),
     USER_NOT_FOUND(1004, "用户不存在"),
-    USER_ALREADY_EXISTS(1005, "用户已存在"),
     OLD_PASSWORD_ERROR(1006, "原密码错误"),
-    NOT_FOUND(1007, "数据不存在"),
-    EMAIL_FORMAT_ERROR(1008, "邮箱格式不正确"),
 
     // RBAC 角色/权限 (1009 起)
     ROLE_NOT_FOUND(1009, "角色不存在"),

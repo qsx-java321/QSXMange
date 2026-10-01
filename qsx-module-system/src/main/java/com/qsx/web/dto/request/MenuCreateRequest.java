@@ -24,8 +24,8 @@ public class MenuCreateRequest {
     /**
      * 类型：MENU-菜单 / PERMISSION-按钮权限，默认 MENU（留空表示用默认值）。
      *
-     * <p>取值白名单必须与 {@link com.qsx.common.constant.PermissionConstants} 的
-     * {@code TYPE_MENU}/{@code TYPE_PERMISSION} 保持同步（注解里写不了常量，只能手工同步）。
+     * <p>取值白名单为 {@code MENU}/{@code PERMISSION} 两个字面量，其中 {@code MENU} 与
+     * {@link com.qsx.common.constant.PermissionConstants#TYPE_MENU} 同值。
      * 此前是自由字符串，而菜单树按 {@code type == "MENU"} 过滤 ⇒ 写错一个字符（如 "menu"）
      * 会让该菜单对所有人的菜单树**静默消失**。
      */
