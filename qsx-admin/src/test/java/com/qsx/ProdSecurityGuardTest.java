@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 生产形态配置守卫（docs/question-list #5）。
+ * 生产形态配置守卫。
  *
  * <p>与 {@code MailChainConfigTest} 同一体例：**不依赖任何外部设施**，也不会因环境缺席而跳过，
  * 因此始终会被执行。守卫拦的是两类「配置忘了改、而且不会报错」的情形：

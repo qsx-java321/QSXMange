@@ -20,7 +20,7 @@ spring:
   datasource:
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
-  # ⚠️ 邮件仍是本地 Mailpit 的配置（docs/question-list 的 #6 为主动搁置项）。
+  # ⚠️ 邮件仍是本地 Mailpit 的配置。
   #    公网部署前必须改 spring.mail.* 指向真实邮件服务商，并同步改 qsx.captcha.from-address。
 
 import:

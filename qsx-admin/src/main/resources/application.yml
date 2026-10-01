@@ -7,7 +7,7 @@ spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/QSXManager?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    # 口令外部化（docs/question-list #4）：默认值是本地 init.sql 的开发口令，
+    # 口令外部化：默认值是本地 init.sql 的开发口令，
     # 让「clone → 建库 → 起服务」开箱即用；**生产形态必须显式提供**——
     # application-prod.yml 用的是**不带默认值**的占位符，解析不到即启动失败。
     username: ${DB_USERNAME:root}
@@ -40,7 +40,7 @@ spring:
           # ⚠️ 三个超时必须显式配置：JavaMail 的默认值是「无限等待」，一旦 SMTP 服务商被
           # greylist、限流，或链路丢包（连上后对端不响应），投递线程会一直挂住不归还。
           # 这种"挂住"会沿着 captchaMailExecutor 扩散：队列打满后由请求线程兜底执行，
-          # Tomcat 线程被钉死在 SMTP 上 ⇒ 全站不可用（docs/question-list #22）。
+          # Tomcat 线程被钉死在 SMTP 上 ⇒ 全站不可用。
           connectiontimeout: 5000
           timeout: 5000
           writetimeout: 5000
@@ -53,7 +53,7 @@ mybatis-plus:
     map-underscore-to-camel-case: true
     # 必须用 Slf4jImpl：StdOutImpl 会 **绕过日志框架**直接 System.out.println，
     # 于是带参数的 SQL 原文（BCrypt 哈希、邮箱、导入默认口令）持续打到 stdout，
-    # 而改 logging.level 对它**完全无效**（docs/question-list #4）。
+    # 而改 logging.level 对它**完全无效**。
     # 需要看 SQL 时改 `logging.level.com.qsx.mapper: debug`，不要改回 StdOutImpl。
     log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
   global-config:
@@ -117,7 +117,7 @@ qsx:
 
 # 启动信息。
 # com.qsx 用 info 而非 debug：debug 会把每次请求的权限缓存命中、SQL 参数等全部打出来，
-# 其中含邮箱与口令哈希（docs/question-list #4）。要看 SQL 时临时加
+# 其中含邮箱与口令哈希。要看 SQL 时临时加
 # `logging.level.com.qsx.mapper: debug`。
 logging:
   level:

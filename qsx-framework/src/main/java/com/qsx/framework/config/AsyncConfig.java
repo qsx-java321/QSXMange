@@ -44,7 +44,7 @@ public class AsyncConfig {
      * 被抓住的 Tomcat 线程会长期不归还，队列打满即等于线程池打满，把"发信慢"放大成"全站不可用"。
      * Abort 则把故障限制在一封邮件上：任务被拒 → 由 {@code CaptchaServiceImpl} 兜住并留 ERROR，
      * **码已经落在 Redis 里**，用户重发即可（代价是要等满 60 秒发送间隔）。
-     * 取舍依据见 docs/question-list #22。
+     * 取舍依据见上方注释。
      *
      * <p>配合 {@code spring.mail.properties.mail.smtp.*} 的三个超时：即便任务真的被执行，
      * 单次 SMTP 交互也不会无限挂住。

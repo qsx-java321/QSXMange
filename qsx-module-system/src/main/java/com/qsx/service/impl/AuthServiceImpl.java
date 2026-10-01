@@ -129,7 +129,6 @@ public class AuthServiceImpl implements AuthService {
         } catch (DuplicateKeyException e) {
             // 「查重 → 插入」之间的并发窗口（同一邮箱并发/双击注册）：uk_email 兜住了一致性，
             // 但异常直穿会变成 body 500「系统繁忙」。映射回与查重一致的业务码
-            //（docs/question-list #27）
             throw new BusinessException(ResultCode.EMAIL_ALREADY_REGISTERED);
         }
     }

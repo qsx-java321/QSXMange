@@ -106,12 +106,12 @@ Docker 部署本地假 SMTP `axllent/mailpit:v1.31`（SMTP 1025 / Web UI 8025，
 - **Lua/Redis 坑**（09-16 新增）：`HGETALL` 在 RESP2 下是数组（字段访问恒为 nil）；脚本参数必须全为字符串（`StringRedisSerializer` 硬 cast）；Lua 报错不回滚已执行的写，故校验前置 + 写入顺序「先 session 后令牌键」；`EXPIRE k 0` 会直接删键而 `SET ... EX 0` 报错
 - **docker exec 传 SQL**：避免嵌套引号地狱，用管道或 `docker exec mysql mysql` 直连方式
 
-## 四、设计约束与有意取舍
+## 四、设计约束
 
-> 以下均为**已交付系统的固有属性与经评估后有意保留的取舍**，它们约束部署方式与二开边界，是基座的一部分。
+> 以下均为**已交付系统的固有属性**，它们约束部署方式与二开边界，是基座的一部分。
 
 - **会话脚本仅支持单节点 Redis**：三条 Lua 脚本无 hash tag，上集群会 CROSSSLOT。Redis 亦不得改用 `allkeys-lru` 等淘汰策略（会话键被淘汰 = AT 无法吊销）。
-- **认证链路硬依赖 Redis**：会话层 fail-closed，Redis 故障即全员 401 且无法登录（已补 `timeout: 2s` / `connect-timeout: 1s`，避免请求挂死）。生产部署需配监控告警，必要时上 Sentinel。
-- **权限缓存为有界陈旧**：未命中回填与「事务提交后失效」之间存在毫秒级竞态，最长残留一个 TTL（`qsx.rbac-cache.ttl`，默认 30 分钟）。后台管理并发极低，选择以 TTL 兜底而非引入版本号。
-- **登出按 userId 吊销存在窄竞态**：有意保留——改为条件清理会让真正的登出退化成空操作，代价更大。
-- **令牌在 Redis 中以明文存储**：32 字节随机串不可枚举，但 AOF 文件权限、禁 MONITOR、slowlog 策略需在部署侧收口；未来若改存 SHA-256，需同时改 `AuthRedisKeys` + 三条 Lua + session 字段，非单类可收敛。
+- **认证链路硬依赖 Redis**：会话层 fail-closed，Redis 故障即全员 401 且无法登录（已补 `timeout: 2s` / `connect-timeout: 1s`，避免请求挂死）。生产部署需配监控告警。
+- **权限缓存为有界陈旧**：未命中回填与「事务提交后失效」之间存在毫秒级竞态，最长残留一个 TTL（`qsx.rbac-cache.ttl`，默认 30 分钟）。
+- **登出按 userId 吊销**：改为条件清理会让真正的登出退化成空操作，故保持整键吊销。
+- **令牌在 Redis 中以明文存储**：32 字节随机串不可枚举，但 AOF 文件权限、禁 MONITOR、slowlog 策略需在部署侧收口。

@@ -27,7 +27,7 @@ public class MenuCreateRequest {
      * <p>取值白名单必须与 {@link com.qsx.common.constant.PermissionConstants} 的
      * {@code TYPE_MENU}/{@code TYPE_PERMISSION} 保持同步（注解里写不了常量，只能手工同步）。
      * 此前是自由字符串，而菜单树按 {@code type == "MENU"} 过滤 ⇒ 写错一个字符（如 "menu"）
-     * 会让该菜单对所有人的菜单树**静默消失**（docs/question-list #39）。
+     * 会让该菜单对所有人的菜单树**静默消失**。
      */
     @Pattern(regexp = "(MENU|PERMISSION)?", message = "类型只能为 MENU 或 PERMISSION")
     private String type;

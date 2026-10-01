@@ -126,7 +126,7 @@ public class UserImportExportServiceImpl implements UserImportExportService {
         } catch (Exception e) {
             // 不回显 e.getMessage()：EasyExcel/POI 的异常原文是英文实现细节
             //（如 BigDecimal 的 "Character a is neither a decimal digit..."），既无助于用户
-            // 定位、又泄漏内部实现；细节只留在服务端日志（docs/question-list #17）
+            // 定位、又泄漏内部实现；细节只留在服务端日志
             log.error("Excel 导入解析失败", e);
             throw new BusinessException(ResultCode.IMPORT_VALIDATE_FAILED.getCode(),
                     "Excel 文件解析失败，请检查文件内容或格式；若表格中含公式等特殊单元格，请先粘贴为值后重试");
@@ -135,7 +135,7 @@ public class UserImportExportServiceImpl implements UserImportExportService {
         // 2.1 公式单元格显式拒绝：EasyExcel 只取公式的**缓存值**（不带缓存值时整格读成 null），
         // 单看数据行无法发现公式；但 ReadCellData 保留了 FormulaData，可据此逐格定位并拒绝。
         // 必须在解析阶段单独收集（而不是混进行校验）：公式无缓存值所在的行映射出来可能就是
-        // 全空行，会被常规校验静默跳过（docs/question-list #24）
+        // 全空行，会被常规校验静默跳过
         if (!listener.getFormulaErrors().isEmpty()) {
             ImportResult failed = new ImportResult();
             failed.setSuccessCount(0);
@@ -197,7 +197,7 @@ public class UserImportExportServiceImpl implements UserImportExportService {
                     ? row.getNickname().trim() : UserConstants.defaultNickname(row.getEmail().trim()));
             user.setStatus(resolveStatus(row.getStatus()));
             // 整批共用同一个公开口令（defaultPassword），必须强制首次改密——否则等于批量签发
-            // 已知口令的账号（docs/question-list #4）。
+            // 已知口令的账号。
             // 注意本值必须由 UserMapper.insertBatch 的列清单承载：那是一条手写的
             // INSERT ... VALUES <foreach>，列清单里没有这一列就会**静默取 DB 默认 0**，
             // 整条闸对导入账号永不生效且零报错。
@@ -209,7 +209,7 @@ public class UserImportExportServiceImpl implements UserImportExportService {
         } catch (DuplicateKeyException e) {
             // 校验快照与批量插入之间的并发窗口（双击导入 / 导入与注册并发撞同一邮箱）：
             // uk_email 兜住了一致性（事务整体回滚，不留半批数据），但异常直穿会变成 body 500。
-            // 与注册/建号的兜底同源（docs/question-list #27 的同族路径），映射为导入校验失败
+            // 与注册/建号的兜底同源，映射为导入校验失败
             throw new BusinessException(ResultCode.IMPORT_VALIDATE_FAILED.getCode(),
                     "导入失败：存在与库中冲突的邮箱（可能为并发导入或并发注册），请刷新后重试");
         }
@@ -401,7 +401,7 @@ public class UserImportExportServiceImpl implements UserImportExportService {
             // rowIndex 为 0-based 物理行索引（表头为 0，数据行从 1 起），Excel 行号 = rowIndex + 1
             int rowNum = context.readRowHolder().getRowIndex() + 1;
             // 公式检查刻意先于「跳过全空行」：公式没有缓存值时整格读成 null，所在行可能
-            // 被判为全空行而直接丢弃——公式就此静默消失，没有任何报错（docs/question-list #24）
+            // 被判为全空行而直接丢弃——公式就此静默消失，没有任何报错
             collectFormulaErrors(context, rowNum);
             if (data == null
                     || (!StringUtils.hasText(data.getEmail())

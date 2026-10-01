@@ -170,7 +170,6 @@ public class UserServiceImpl implements UserService {
         } catch (DuplicateKeyException e) {
             // 「查重 → 插入」之间的并发窗口（双击/并发建号）：uk_email 兜住了一致性，
             // 但异常直穿会变成 body 500「系统繁忙」。映射回与查重一致的业务码
-            //（docs/question-list #27）
             throw new BusinessException(ResultCode.EMAIL_ALREADY_REGISTERED);
         }
         return UserVO.from(user);
@@ -283,13 +282,13 @@ public class UserServiceImpl implements UserService {
         // 想给超管换角色只能改库——这是与 1011/1026 同口径的有意设计。
         // 错误码优先级：1004（用户不存在）→ 1033（目标超管）→ 1009（角色不存在）。本闸刻意排在
         // 「校验目标角色均存在」之前：否则"对超管 + 传错角色 id"会返回 1009，让人误以为改个参数就能成功。
-        // 已知残留：existsRoleCode 是快照读，与并发写之间存在 check-then-act 窗口（见 question-list #27），本批不处理。
+        // 注意：existsRoleCode 是快照读，与并发写之间存在 check-then-act 窗口。
         if (isBuiltInAdmin(userId)) {
             throw new BusinessException(ResultCode.ADMIN_USER_ROLE_IMMUTABLE);
         }
         // 闸 2：授予内置超管角色（ADMIN）必须由「本身持有 ADMIN」的操作者发起。
         // 闸 1 只看**目标**（防架空既有超管），本闸补上**操作者**侧——否则持有 user:assign-role 的
-        // 普通管理员可以给自己或他人绑 ADMIN，等于自助提权（docs/question-list #1 的残留面）。
+        // 普通管理员可以给自己或他人绑 ADMIN，等于自助提权。
         // 无操作者上下文（程序内直调 service）一律按"不是超管"处理：该路径不可能来自匿名 HTTP
         //（控制器需要 user:assign-role 鉴权），fail-closed 更安全，且不会把语义搅成 401。
         // roleIds 为 null 表示"清空角色"，不含授予语义，故先判非空。

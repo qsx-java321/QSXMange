@@ -13,7 +13,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 邮件投递链路的配置守卫（docs/question-list #22）。
+ * 邮件投递链路的配置守卫。
  *
  * <p>这两个断言不是"测试实现细节"，而是把两条**决定全站可用性**的决策固定下来——
  * 它们都是"改回默认值就悄悄退化"的类型：

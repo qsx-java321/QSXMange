@@ -25,8 +25,7 @@ public class MenuUpdateRequest {
     /**
      * 类型取值白名单：与 {@link com.qsx.common.constant.PermissionConstants} 的
      * {@code TYPE_MENU}/{@code TYPE_PERMISSION} 同步（注解写不了常量）。
-     * 修改路径此前完全无约束，填错会让菜单树按 {@code type == "MENU"} 过滤时静默失配
-     * （docs/question-list #39）。
+     * 修改路径此前完全无约束，填错会让菜单树按 {@code type == "MENU"} 过滤时静默失配。
      * 注意与 {@link MenuCreateRequest} 的差别：新增留空表示取默认 MENU，修改为必填。
      */
     @NotNull(message = "类型不能为空")

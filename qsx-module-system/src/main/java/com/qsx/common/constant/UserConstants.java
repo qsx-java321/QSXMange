@@ -10,8 +10,7 @@ package com.qsx.common.constant;
  *   <li>昵称留空时默认取邮箱，而 {@code nickname} 只有 50 ⇒ 邮箱 &gt; 50 字符就 500
  *       （注册是匿名接口，任何访客都能触发）；</li>
  *   <li>删除时把邮箱改写成 {@code email + "#deleted_" + 13 位毫秒}（固定 22 字符），
- *       而 {@code email} 列只有 128 ⇒ 邮箱 ≥ 107 字符的用户**永远删不掉**。
- *       见 docs/question-list #19。</li>
+ *       而 {@code email} 列只有 128 ⇒ 邮箱 ≥ 107 字符的用户**永远删不掉**。</li>
  * </ul>
  */
 public final class UserConstants {

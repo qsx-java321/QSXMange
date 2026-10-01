@@ -113,7 +113,6 @@ public class RoleServiceImpl implements RoleService {
         } catch (DuplicateKeyException e) {
             // 判重与插入之间的并发窗口（双击/并发建角色）：uk_role_code 兜住了一致性，
             // 但异常直穿会变成 body 500「系统繁忙」。映射回与判重一致的业务码
-            //（docs/question-list #27）
             throw new BusinessException(ResultCode.ROLE_CODE_EXISTS);
         }
         return RoleVO.from(role);

@@ -3,7 +3,7 @@ package com.qsx.config;
 import org.springframework.util.StringUtils;
 
 /**
- * 生产形态的启动期自检（对应 docs/question-list #5 / #6）。
+ * 生产形态的启动期自检。
  *
  * <p><b>为什么需要它</b>：本应用有一批「本地联调很方便、生产形态致命」的配置——
  * 验证码 debug 通道直返验证码、导入默认口令是仓库里公开的值、数据库口令是开发口令。

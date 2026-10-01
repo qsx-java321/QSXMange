@@ -129,7 +129,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 ### 统一返回与审计
 
 - 所有接口返回 `Result{code,message,data}`。**业务异常返回 HTTP 200 + body 里的业务码**（`GlobalExceptionHandler`），断言要看业务码而不是 HTTP 状态。
-- 操作日志由 `OperationLogAspect`（`qsx-framework`）对 `com.qsx.web.controller` 包级扫描，以 `Result.code==200` 判定成功，经 `AccessLogRecorder` 端口异步落库；401 由 `RestAuthenticationEntryPoint` 补记、`@PreAuthorize` 的 403 由切面捕获、URL 级 403 由 `RestAccessDeniedHandler` 补记、400 由异常处理器补记。**`/api/logs` 前缀被切面整体排除**（避免日志的日志无限膨胀）——其查询与删除都不进审计表，属已知缺口（见设计文档 05 §7）。
+- 操作日志由 `OperationLogAspect`（`qsx-framework`）对 `com.qsx.web.controller` 包级扫描，以 `Result.code==200` 判定成功，经 `AccessLogRecorder` 端口异步落库；401 由 `RestAuthenticationEntryPoint` 补记、`@PreAuthorize` 的 403 由切面捕获、URL 级 403 由 `RestAccessDeniedHandler` 补记、400 由异常处理器补记。**`/api/logs` 前缀被切面整体排除**（避免日志的日志无限膨胀）——其查询与删除都不进审计表。
 - **`@Async` 不得自调用**：`OperationLogServiceImpl.record()` 上的 `@Async` 靠 Spring 代理生效，若改成同类内部调用（如再包一层 `this.xxx()`）会静默失效——日志落库退化为同步、主请求被数据库写入阻塞，且**没有编译错误**。
 
 ## 必须遵守的项目约定（都是踩过坑换来的）
@@ -142,7 +142,7 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 - **无事务时发布的事件会被静默丢弃**：`@TransactionalEventListener` 默认 `fallbackExecution=false`。给非 `@Transactional` 方法补发失效事件时必须同时加事务，或显式设置 fallback。
 - **测试清理禁用全表删除**：`DELETE FROM sys_user` 会删掉预置超管；`userMapper.delete(null)` 更会因 `@TableLogic` 变成全表逻辑删除。只清测试用户（`email LIKE '%@test.com%'`）与 `test-` 前缀的测试角色/菜单。
 - **物理唯一索引 + 逻辑删除 ⇒ 判重必须含已删行**：`uk_role_code` / `uk_perm_code` 都是**不含 `deleted` 列**的唯一索引，而删除是逻辑删除——用 `BaseMapper.selectOne` 判重会被 `@TableLogic` 自动过滤掉已删行，于是「删除后用同一编码新建」通过校验、在 INSERT 时撞唯一索引返回 **500 而非 1010/1016**。角色与权限走 `countByCodeIncludeDeleted`（显式 SQL 绕开过滤）；用户则用「删除时把 `email` 改写为 `#deleted_<时间戳>`」释放索引。
-- **「查重 → 插入」必须兜住并发窗口**：唯一索引只保证一致性，`DuplicateKeyException` 直穿会变成 body 500。注册 / 后台建号 / 建角色 / 建菜单 / 导入批量落库均在插入处捕获并映射回与查重一致的业务码（注册与建号→1001、建角色→1010、建菜单→1016、导入→1017 可行动提示；#27）。
+- **「查重 → 插入」必须兜住并发窗口**：唯一索引只保证一致性，`DuplicateKeyException` 直穿会变成 body 500。注册 / 后台建号 / 建角色 / 建菜单 / 导入批量落库均在插入处捕获并映射回与查重一致的业务码（注册与建号→1001、建角色→1010、建菜单→1016、导入→1017 可行动提示）。
 - **断言要打到机制层**：验证「吊销即时生效」这类能力时，除了断言 401，还要断言 Redis 键已消失——否则每请求查库的 `isEnabled()` 兜底会让漏实现的代码也通过测试。
 - **会话脚本仅支持单节点 Redis**（无 hash tag，上集群会 CROSSSLOT）；Redis 不得改用 `allkeys-lru` 等淘汰策略（会话键被淘汰 = AT 无法吊销）。
 - **MyBatis-Plus 的日志实现不得改回 `StdOutImpl`**：它绕过日志框架直写 stdout，把带参数的 SQL 原文（邮箱、BCrypt 哈希、导入默认口令）持续打出来，而调 `logging.level` 对它**完全无效**。当前是 `Slf4jImpl` + `com.qsx: info`；要看 SQL 时加 `logging.level.com.qsx.mapper: debug`。
@@ -158,17 +158,13 @@ qsx-admin → qsx-module-system → qsx-framework → qsx-security → qsx-commo
 
 `SessionLuaTest` 是唯一直连会话层的测试（不经 HTTP），覆盖原子性、并发双花、清理完整性——**改动 Lua 脚本后必须让它全绿**。
 
-**36 个接口 ↔ 测试类的对应关系见 `docs/test/项目测试报告.md` 的「四、结果汇总与覆盖矩阵」（分域明细见同目录 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道`）。** 新增接口须同步补测试：鉴权正反向、业务码矩阵、边界（401/403、越权、不存在）、以及机制层断言（该落库的落库、该清的键要清）。全部测试类：认证会话 `AuthControllerTest` / `AuthRefreshTest` / `AuthSessionTest` / `SecurityAccessTest` / `SessionLuaTest`，用户 `UserControllerTest` / `UserEdgeTest` / `UserKickTest` / `UserImportExportTest`，角色权限 `RoleTest` / `PermissionTest` / `RbacTest` / `RbacCacheTest` / `RbacCacheDisabledTest` / `AdminProtectionTest`，菜单日志 `MenuTest` / `LogTest`，邮箱验证码 `CaptchaTest` / `ForgotPasswordTest` / `ChangePasswordChannelTest` / `CaptchaMailSmokeTest`（Mailpit 未启动时 `assumeTrue` 跳过），强制改密 `MustChangePasswordTest`，配置守卫 `MailChainConfigTest` / `ProdSecurityGuardTest`（两者都不依赖外部设施，永不跳过），改造回归 `RefactorRegressionTest`，全链路 `BusinessFlowTest`。
+**36 个接口 ↔ 测试类的对应关系见 `docs/test/项目测试报告.md` 的「四、结果汇总与覆盖矩阵」（分域明细见 `docs/test/分域基线/` 下的 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道`）。** 新增接口须同步补测试：鉴权正反向、业务码矩阵、边界（401/403、越权、不存在）、以及机制层断言（该落库的落库、该清的键要清）。全部测试类：认证会话 `AuthControllerTest` / `AuthRefreshTest` / `AuthSessionTest` / `SecurityAccessTest` / `SessionLuaTest`，用户 `UserControllerTest` / `UserEdgeTest` / `UserKickTest` / `UserImportExportTest`，角色权限 `RoleTest` / `PermissionTest` / `RbacTest` / `RbacCacheTest` / `RbacCacheDisabledTest` / `AdminProtectionTest`，菜单日志 `MenuTest` / `LogTest`，邮箱验证码 `CaptchaTest` / `ForgotPasswordTest` / `ChangePasswordChannelTest` / `CaptchaMailSmokeTest`（Mailpit 未启动时 `assumeTrue` 跳过），强制改密 `MustChangePasswordTest`，配置守卫 `MailChainConfigTest` / `ProdSecurityGuardTest`（两者都不依赖外部设施，永不跳过），改造回归 `RefactorRegressionTest`，全链路 `BusinessFlowTest`。
 
 ## 文档索引
 
 - `README.md`：项目概览与上手（技术栈、功能一览、模块结构、快速开始、接口速览、常用错误码）
 - `docs/design/`：**详细设计文档**——`README.md`（索引）· `01-架构与模块划分` · `02-认证与会话` · `03-授权与RBAC` · `04-邮箱验证码` · `05-业务功能与保护矩阵` · `06-基础设施、审计与测试`。
-  **改代码前先读对应那一篇**；`05` 的 §7 是**设计级**已知缺口清单（本地阶段有意搁置的问题都在那里）。
+  **改代码前先读对应那一篇**。
   约定：实施类计划文档在功能交付后归档删除（内容并入设计文档与会话总结，历史见 git 记录）。
-- `docs/question-list/`：**问题清单（单文档）**——`README.md`：#1–#40 完整状态总表（已修复 / 主动搁置 / 已撤销）、搁置与撤销的理由及重新评估触发点、防复踩记录、#4 残留。
-  **编号 #1–#40 已冻结，不得重排或复用**（被设计文档 `05` §7/§8 与测试报告 §六 引用）；新增从 **#41** 起；撤销的项保留编号只改状态。
-  动手修任何一条之前，先读对应位置的**当前源码**——该目录读取规则是「只是草稿，代码才是真相」。
-  该目录已于 2026-09-30 精简为单文档（原 01–04 合并；实测记录、红跑矩阵与实施史见 git 记录）。
-- `docs/test/项目测试报告.md`：**全项目测试总报告**（总览 + 按业务域拆分的 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道`：36 接口覆盖矩阵、自动化基线快照（当轮 204 例，现 257 例）、真实 HTTP 逐接口明细、环境清理验收）；原始请求/响应明细随总览精简已移除（历史见 git 记录）
-- `docs/session-notes/qsxmanager/`：`会话总结-qsxmanager全项目.md` 是**主线总览**（阶段脉络、设计约束与有意取舍）；单次会话的详细复盘写 `会话总结-<主题>-<日期>.md` 增量文件（如 `会话总结-验证码功能实施与文档重构-20260927.md`），总总结只保留主线并指向它们。早期增量总结已合并删除，早期测试细节已并入 `docs/test/项目测试报告.md`
+- `docs/test/`：**测试文档中心**——入口 `README.md`（文档地图 + 复跑指引）；`项目测试报告.md` 是**唯一测试报告**（Track A 自动化基线 257 例 + Track B 真实 HTTP 正向/反向/边界：36 接口覆盖矩阵、业务码与保护闸矩阵、机制层断言、附录 A 执行要点）；`分域基线/01~07` 是按业务域的**自动化用例索引**（只记「接口 ↔ 测试类 ↔ 断言点」，**不记例数**——例数唯一数据源在报告 §四.1；已于 2026-10-01 对齐至 `b5c922b`，接口权威行为仍以 `docs/design/` 与当前源码为准）。实施类计划文档在功能交付后归档删除，本目录不保留计划稿。
+- `docs/session-notes/qsxmanager/`：`会话总结-qsxmanager全项目.md` 是**主线总览**（阶段脉络、设计约束与关键决策）；单次会话的详细复盘写 `会话总结-<主题>-<日期>.md` 增量文件（如 `会话总结-验证码功能实施与文档重构-20260927.md`），总总结只保留主线并指向它们。早期增量总结已合并删除，早期测试细节已并入 `docs/test/项目测试报告.md`

@@ -365,7 +365,7 @@ class UserControllerTest extends BaseIntegrationTest {
         // 100 字符 = UserConstants.EMAIL_MAX，是接口允许的最长邮箱。
         // 删除要把邮箱改写成「原邮箱 + #deleted_ + 13 位毫秒」（共 22 字符）来释放唯一索引，
         // 上限若取得过大（如最初文档里写的 110）就会在这一步撞 VARCHAR(128) → 500，
-        // 且该账号永远删不掉（历史缺陷，见 docs/question-list #19）
+        // 且该账号永远删不掉（历史缺陷）
         String email = longEmail(100);
         assertThat(email).hasSize(100);
         MvcResult created = createUser(token, email, "abc123", 0);

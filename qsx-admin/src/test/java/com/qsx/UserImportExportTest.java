@@ -102,7 +102,7 @@ class UserImportExportTest extends BaseIntegrationTest {
         assertEquals(email2, u2.getNickname());
 
         // 导入落库即置「必须首次改密」：全批次共用同一个公开口令，不强制改密等于批量签发
-        // 已知口令的账号（docs/question-list #4）。
+        // 已知口令的账号。
         // ⚠️ 这条断言同时是 **UserMapper.insertBatch 列清单**的守卫——那条 SQL 是手写的
         // INSERT ... VALUES <foreach>，列清单里漏掉 must_change_password 就会静默取 DB 默认 0，
         // 别的用例都不会红，只有这里会。
@@ -151,7 +151,7 @@ class UserImportExportTest extends BaseIntegrationTest {
         // 因此必须在 validateRow 里独立拦一道，与 DTO 的 @Size 保持同一上限。
         // 注意这道闸不是"修 500"（120 字符仍塞得进 VARCHAR(128)，不拦反而会成功），
         // 它拦的是**造出将来删不掉的账号**：逻辑删除要把邮箱改写成「原邮箱 + 22 字符后缀」，
-        // 超过 106 字符的邮箱会在改写时溢出 → DELETE 永远 500（见 docs/question-list #19）
+        // 超过 106 字符的邮箱会在改写时溢出 → DELETE 永远 500
         String token = adminToken();
         String longEmail = "e".repeat(111) + "@test.com";   // 120 字符
         String okEmail = uniqueEmail("imp-ok2");
@@ -261,7 +261,7 @@ class UserImportExportTest extends BaseIntegrationTest {
     @Test
     @DisplayName("导入公式带非法缓存值：1017 固定文案，不回显底层英文异常原文")
     void importUsers_formulaBadCachedValue_shouldReturnFixedMessage() throws Exception {
-        // docs/question-list #24 实测的「公式**带**缓存值」路径：缓存值非数字且不带 t 属性时，
+        // 公式**带**缓存值的路径：缓存值非数字且不带 t 属性时，
         // EasyExcel 按数值解析 → BigDecimal 抛 NumberFormatException → 读取中断。
         // 修复前该异常原文（"...Character a is neither a decimal digit..."）会随 1017 回显（#17）
         String token = adminToken();
@@ -441,9 +441,9 @@ class UserImportExportTest extends BaseIntegrationTest {
      * <p>列顺序与 {@code UserImportRow} 的字段顺序一致（读取时按 index 映射）。
      *
      * @param badCachedValue true 时给公式格注入非数字缓存值（见下），复现
-     *                       docs/question-list #24 的「公式带缓存值 → NumberFormatException」
+     *                       「公式带缓存值 → NumberFormatException」
      *                       路径；false 时保持 POI 默认（只有 {@code <f>} 无缓存值），
-     *                       即 #24 里「静默读成 null」的那条路径
+     *                       即「静默读成 null」的那条路径
      */
     private MockMultipartFile formulaExcelFile(String email, boolean badCachedValue) throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook();

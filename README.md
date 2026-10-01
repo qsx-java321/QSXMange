@@ -2,6 +2,8 @@
 
 > 单体**多模块**（5 个 Maven 模块）、前后端分离的**用户后台管理基础 demo** —— 为其他项目提供
 > 可直接复用的认证、授权、用户、会话与邮箱验证码基座。
+>
+> **开发背景**：本项目是**个人学习阶段的本地练习项目**——开发者是一名计算机专业在读大学生，在本地环境中边学边做。项目对工程完备性、性能指标与生产部署条件不作高要求，目标是打通并讲清认证 / 授权 / 会话 / 邮箱验证码等后端基础能力。
 
 **核心特点**：
 
@@ -165,7 +167,6 @@ mvn test -Dtest=SessionLuaTest -Dsurefire.failIfNoSpecifiedTests=false  # 单个
 | 文档 | 定位 |
 | :--- | :--- |
 | [docs/design/](docs/design/) | **详细设计文档**：架构与模块划分 · 认证与会话 · 授权与 RBAC · 邮箱验证码 · 业务功能与保护矩阵 · 基础设施、审计与测试 |
-| [docs/test/项目测试报告.md](docs/test/项目测试报告.md) | 测试总报告：36 接口覆盖矩阵、自动化基线（当轮快照 204 例，现 257 例）、真实 HTTP 逐笔明细；分域明细见同目录 `01-认证与会话` … `07-邮件投递与DEBUG验证码通道` |
-| [docs/question-list/](docs/question-list/) | **问题清单（单文档）**：#1–#40 完整列表（已修复 / 主动搁置 / 已撤销）、搁置与撤销理由、防复踩记录（2026-09-30 待修项已清零） |
+| [docs/test/](docs/test/) | **测试文档中心**（入口 [`README.md`](docs/test/README.md)）：[`项目测试报告.md`](docs/test/项目测试报告.md) 是唯一测试报告（36 接口覆盖矩阵、自动化基线 257 例、真实 HTTP 正向/反向/边界明细）；`分域基线/` 为按业务域的自动化用例索引 |
 | [docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md](docs/session-notes/qsxmanager/会话总结-qsxmanager全项目.md) | 全项目主线总览（发展阶段、跨阶段决策与教训） |
-| [docs/dev-env/组件依赖README.md](docs/dev-env/组件依赖README.md) | Docker 中间件清单与启停（MySQL / Redis / Mailpit 等） |
+| [docs/dev-env/组件依赖README.md](docs/dev-env/组件依赖README.md) | Docker 组件启停与本地环境备忘（MySQL / Redis / Mailpit 等）、utf8mb4 导入防乱码 |

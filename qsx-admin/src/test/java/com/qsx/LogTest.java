@@ -91,7 +91,7 @@ class LogTest extends BaseIntegrationTest {
         cleanLogs();
         // 在 URL 后面挂一长串查询参数：不截断的话 MySQL 会以 1406 拒绝整行写入，
         // 异常被 record() 的 catch 吞掉 ⇒ 这次请求在审计里彻底消失，
-        // 等于给了"靠长参数让自己不留痕"的规避手段（docs/question-list #23）
+        // 等于给了"靠长参数让自己不留痕"的规避手段
         //
         // 注意必须把查询串**写进 URL**（而不是用 .param()）：MockMvc 的 param() 只填参数表，
         // request.getQueryString() 仍为 null，而切面记录的正是 uri + "?" + queryString

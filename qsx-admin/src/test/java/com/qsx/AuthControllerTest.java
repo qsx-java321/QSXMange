@@ -67,7 +67,7 @@ class AuthControllerTest extends BaseIntegrationTest {
         // 101 字符 = EMAIL_MAX + 1。@Email 只限制「本地部分 ≤64、域名标签 ≤63」而不限总长度
         // （Hibernate Validator 实测可放行 260 字符的地址），所以超长地址靠加长域名构造，
         // 拦它的只有 DTO 上的 @Size；没有它就会一路走到 INSERT 撞 VARCHAR(128)，
-        // 以 1406 → 500 收场（详见 docs/question-list #19）
+        // 以 1406 → 500 收场
         String email = longEmail(101);
         assertThat(email).hasSize(101);
 

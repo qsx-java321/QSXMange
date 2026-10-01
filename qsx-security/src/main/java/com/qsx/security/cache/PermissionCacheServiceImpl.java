@@ -22,7 +22,7 @@ import java.util.stream.Collectors;
  * - Redis 异常降级回源 MySQL，缓存故障不影响业务
  * - enabled=false 时退化为实时查库（load 不读写 Redis，evict 为空操作）
  *
- * <p>两处 fail 语义上的注意（见 docs/question-list #25）：
+ * <p>两处 fail 语义上的注意：
  * <ul>
  *   <li>读到**无法解析**的坏值时不能走"降级且不写缓存"那条路——那会让坏值留到 TTL 到期，
  *       整个 TTL 内每个请求都重复解析失败；必须落到回源 + 回填，由 SET 覆盖它（自愈）；</li>

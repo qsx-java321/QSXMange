@@ -18,7 +18,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 /**
- * 强制首次改密的机制层用例（docs/question-list #4）。
+ * 强制首次改密的机制层用例。
  *
  * <p>被测的是「初始口令必须失效」这条能力，断言因此一律打到机制层：
  * 除了业务码，还要直查 {@code sys_user.must_change_password} 与 Redis 的会话键——
