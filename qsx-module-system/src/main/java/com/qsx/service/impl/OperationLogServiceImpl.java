@@ -18,10 +18,19 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 
 /**
- * 操作日志服务实现
+ * 操作日志服务实现（异步写入端口 + 查询/删除/清空）。
  *
- * 同时实现写入端口 {@link AccessLogRecorder}：security 的 401/403 处理器与
- * framework 的切面/异常处理器都通过该端口落库，从而不必依赖本模块。
+ * <p>业务职责：审计日志的异步落库与分页查询、按 ID 删除、一键清空。
+ *
+ * <p>使用场景：security 的 401/403 处理器与 framework 的切面/异常处理器通过
+ * {@link AccessLogRecorder} 端口异步写入；日志管理端接口经 {@link OperationLogService}
+ * 查询与维护（{@code /api/logs} 前缀被审计切面整体排除，这些操作自身不记审计）。
+ *
+ * <p>核心依赖：{@link OperationLogMapper}（持久层）、{@code operationLogExecutor}
+ * 线程池（{@link Async}）。
+ *
+ * <p>线程安全与失败策略：写入在独立线程池异步执行，落库失败仅 ERROR 告警、绝不影响
+ * 主请求；超长字段先截断再落库，避免 MySQL 1406 使整条审计被静默丢弃。
  */
 @Slf4j
 @Service
@@ -34,11 +43,15 @@ public class OperationLogServiceImpl implements OperationLogService, AccessLogRe
     }
 
     /**
-     * 异步落库一条审计记录（独立线程，失败不影响主请求）
+     * 异步落库一条审计记录（独立线程，失败不影响主请求）。
      *
-     * <b>@Async 必须标在本方法上，且不得由本类内部自调用</b>：Spring 的异步是基于代理的，
+     * <p><b>@Async 必须标在本方法上，且不得由本类内部自调用</b>：Spring 的异步是基于代理的，
      * 自调用不经过代理会让 @Async 静默失效——日志落库退化为同步、主请求被数据库写入阻塞，
-     * 而且不会有任何编译错误。
+     * 而且不会有任何编译错误。url/errorMsg 先截断再落库，避免列宽溢出（1406）导致整条审计
+     * 被丢弃、使请求不留痕迹。
+     *
+     * @param command 审计命令（用户、方法、URL、HTTP 状态、成功标志、错误信息、耗时等），
+     *                由 {@link AccessLogRecorder} 各调用点按响应语义填充
      */
     @Override
     @Async("operationLogExecutor")
@@ -87,6 +100,15 @@ public class OperationLogServiceImpl implements OperationLogService, AccessLogRe
         return value.substring(0, max);
     }
 
+    /**
+     * 分页查询操作日志。
+     *
+     * <p>过滤条件均可空：用户名/URL 模糊匹配，成功标志/方法精确匹配，时间范围取闭区间；
+     * 按 id 倒序（最新的在前）。
+     *
+     * @param query 分页查询条件（页码、页大小、可选的用户名/URL/成功标志/方法/起止时间）
+     * @return 分页结果，每行为日志视图对象
+     */
     @Override
     public PageResult<OperationLogVO> page(LogQuery query) {
         LocalDateTime begin = query.getBeginTime();
@@ -106,12 +128,20 @@ public class OperationLogServiceImpl implements OperationLogService, AccessLogRe
         return PageResult.of(page.convert(OperationLogVO::from));
     }
 
+    /**
+     * 按主键删除单条日志（日志不可变，此处物理删除）。
+     *
+     * @param id 日志 ID；记录不存在时为无操作（幂等，不报错）
+     */
     @Override
     public void deleteById(Long id) {
         // 日志不可变，物理删除
         operationLogMapper.deleteById(id);
     }
 
+    /**
+     * 清空全部操作日志（物理删除，不可恢复）。
+     */
     @Override
     public void clear() {
         operationLogMapper.delete(new LambdaQueryWrapper<>());

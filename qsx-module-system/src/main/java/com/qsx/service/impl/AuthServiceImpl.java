@@ -39,7 +39,24 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * 认证服务实现
+ * 认证服务实现。
+ *
+ * <p>业务职责：编排认证域全部用例——注册、登录、刷新令牌、登出、忘记密码重置、
+ * 修改密码（旧密码/验证码双通道）与邮箱验证码发送。
+ *
+ * <p>使用场景：{@code AuthController} 下全部 {@code /auth/**} 端点的业务入口；
+ * 其中 {@code logout}/{@code me}/{@code changePassword} 依赖请求上下文中的登录态。
+ *
+ * <p>核心依赖：{@link UserService}（用户读写）、{@link AuthSessionService}（Redis 双 token
+ * 会话，令牌有效性的唯一真相源）、{@link PermissionCacheService}（角色/权限码）、
+ * {@link CaptchaService}（验证码发送与校验）、Spring Security 的 {@link AuthenticationManager}
+ * 与 {@link PasswordEncoder}。
+ *
+ * <p>事务与幂等：本类自身不声明事务，依赖被调方法既有的事务边界；注册的「查重→插入」
+ * 并发窗口由 uk_email 兜底并映射回业务码，刷新令牌经会话层 Lua 原子轮换、同一令牌不可双花。
+ *
+ * <p>失败策略：会话链路 fail-closed（Redis 故障拒绝签发/轮换）；登出、改密与密码重置
+ * 后的会话清理失败仅 ERROR 告警不阻断（业务语义优先，但需可告警、可检索）。
  */
 @Service
 public class AuthServiceImpl implements AuthService {
@@ -70,6 +87,24 @@ public class AuthServiceImpl implements AuthService {
         this.captchaService = captchaService;
     }
 
+    /**
+     * 按场景发送邮箱验证码（对外接口 {@code POST /auth/captcha}）。
+     *
+     * <p>三种场景的前置校验不同：{@code REGISTER} 要求邮箱未被占用（与注册同码）；
+     * {@code CHANGE_PASSWORD} 要求已登录且邮箱为本人（本接口 URL 层 permitAll，未登录时
+     * 由 {@link SecurityUtils} 抛未登录业务码）；{@code FORGOT_PASSWORD} 对未注册邮箱
+     * 不落码、不投递、静默返回，对外与已注册邮箱的成功响应完全一致（防枚举）。
+     * 投递失败不阻断：码已落 Redis，用户可在发送间隔过后重发。
+     *
+     * @param request  发码请求（场景 + 邮箱，字段合法性由 DTO 校验保证）
+     * @param clientIp 客户端 IP，用于 IP 日限流；允许为空/空白（归一为 {@code unknown}，
+     *                 避免与真实 IP 撞键）
+     * @return 仅调试模式（{@code qsx.captcha.debug=true}）返回验证码明文供联调；
+     *         正常路径恒返回 {@code null}
+     * @throws BusinessException 注册场景邮箱已占用（{@link ResultCode#EMAIL_ALREADY_REGISTERED}）、
+     *         改密场景邮箱与当前登录用户不一致（{@link ResultCode#CAPTCHA_EMAIL_MISMATCH}）、
+     *         触发间隔/日限限流（{@link ResultCode#CAPTCHA_SEND_TOO_FREQUENT}）
+     */
     @Override
     public String sendCaptcha(CaptchaSendRequest request, String clientIp) {
         CaptchaScene scene = request.getScene();
@@ -105,6 +140,19 @@ public class AuthServiceImpl implements AuthService {
         return captchaService.send(scene, email, clientIp);
     }
 
+    /**
+     * 自助注册：校验邮箱唯一性与验证码后落库，账号默认状态正常。
+     *
+     * <p>校验顺序刻意是「唯一性 → 验证码」：验证码校验成功即用后即焚，若先校验，
+     * 已注册邮箱的重试会把用户手里那张有效的码烧掉；同时保持「重复注册返回邮箱已注册」
+     * 的既有语义。昵称缺省时按邮箱生成默认昵称；「查重 → 插入」之间的并发窗口由
+     * uk_email 兜住并映射为同一业务码。自注册口令由用户自选，不置「强制首次改密」。
+     *
+     * @param request 注册请求（邮箱 + 密码 + 验证码，昵称可空）
+     * @throws BusinessException 邮箱已注册（{@link ResultCode#EMAIL_ALREADY_REGISTERED}）、
+     *         验证码无效（{@link ResultCode#CAPTCHA_INVALID}）或错误次数超限
+     *         （{@link ResultCode#CAPTCHA_ATTEMPT_EXCEEDED}）
+     */
     @Override
     public void register(RegisterRequest request) {
         // 邮箱唯一性校验（逻辑删除的用户不入库此邮箱，可正常重新注册）
@@ -133,6 +181,18 @@ public class AuthServiceImpl implements AuthService {
         }
     }
 
+    /**
+     * 账号密码登录：认证通过后签发双 token，并返回用户信息与角色/权限码。
+     *
+     * <p>认证由 Spring Security 完成（含禁用判定）；签发使同用户旧会话的 at/rt 立即失效
+     * （单端登录）。登录本身不因「强制首次改密」标志失败，只把标志回传给前端，
+     * 由令牌过滤器在后续请求上拦截。
+     *
+     * @param request 登录请求（邮箱 + 密码）
+     * @return 登录结果：双 token、用户基础信息、角色码/权限码、强制改密标志
+     * @throws BusinessException 账号被禁用（{@link ResultCode#USER_DISABLED}）或
+     *         邮箱/密码错误（{@link ResultCode#EMAIL_OR_PASSWORD_ERROR}）
+     */
     @Override
     public LoginVO login(LoginRequest request) {
         Authentication authentication;
@@ -169,6 +229,18 @@ public class AuthServiceImpl implements AuthService {
         return vo;
     }
 
+    /**
+     * 刷新令牌：以 refresh token 为身份来源，实时查库兜底后原子轮换出一对新 token。
+     *
+     * <p>关键顺序为「只读反查身份 → 查库确认用户存在且未禁用 → 原子轮换」：查库刻意
+     * 放在轮换之前，避免数据库抖动时烧掉用户的有效会话；轮换由会话层 Lua 原子完成
+     * （重验 rt、双保险比对 session、绝对上限判定）。刷新本身不因强制改密标志失败。
+     *
+     * @param request 刷新请求（仅 refresh token）
+     * @return 新的 access/refresh token 与强制改密标志
+     * @throws BusinessException 令牌缺失/无效/已过期/超绝对上限，或 Redis 故障，
+     *         统一 {@link ResultCode#REFRESH_TOKEN_INVALID}（fail-closed）
+     */
     @Override
     public RefreshVO refresh(RefreshRequest request) {
         String rawRefreshToken = request.getRefreshToken();
@@ -209,6 +281,19 @@ public class AuthServiceImpl implements AuthService {
         return vo;
     }
 
+    /**
+     * 忘记密码重置：校验两次密码一致性与验证码后更新口令，并注销该用户全部会话。
+     *
+     * <p>未注册邮箱在发码阶段即被静默跳过（不落码），此处必然落到验证码无效，
+     * 与「码过期/填错」返回同一结果，不泄露邮箱是否注册；发码后用户被删的并发窗口
+     * 同样按验证码无效处理。重置成功后的会话清理失败仅 ERROR 告警不阻断
+     * （密码已改成功的语义优先，但需可告警、可检索）。
+     *
+     * @param request 重置请求（邮箱 + 新密码 + 确认密码 + 验证码）
+     * @throws BusinessException 两次密码不一致（{@link ResultCode#PASSWORD_NOT_MATCH}）、
+     *         验证码无效（{@link ResultCode#CAPTCHA_INVALID}）或错误次数超限
+     *         （{@link ResultCode#CAPTCHA_ATTEMPT_EXCEEDED}）
+     */
     @Override
     public void forgotPassword(ForgotPasswordRequest request) {
         // 一致性校验放 Service（不放 DTO 的 @AssertTrue）：DTO 校验失败会统一压成 400，
@@ -240,6 +325,15 @@ public class AuthServiceImpl implements AuthService {
         }
     }
 
+    /**
+     * 登出：清理当前用户的 at/rt/session 三键，access token 立即失效。
+     *
+     * <p>以用户意图为准：Redis 异常降级为成功（仅 WARN 告警），避免登出界面卡死；
+     * 代价是服务端会话可能未真正清除（旧 AT 在有效期内仍可用）。
+     *
+     * @throws BusinessException 未登录时由 {@link SecurityUtils#getCurrentUserId()} 抛出
+     *         （{@link ResultCode#UNAUTHORIZED}）
+     */
     @Override
     public void logout() {
         Long userId = SecurityUtils.getCurrentUserId();
@@ -253,12 +347,33 @@ public class AuthServiceImpl implements AuthService {
         }
     }
 
+    /**
+     * 获取当前登录用户的信息（基础资料快照，不含角色/权限码）。
+     *
+     * @return 当前用户信息的视图对象
+     * @throws BusinessException 未登录时由 {@link SecurityUtils#getCurrentUser()} 抛出
+     *         （{@link ResultCode#UNAUTHORIZED}）
+     */
     @Override
     public UserVO me() {
         AuthUserAccount account = SecurityUtils.getCurrentUser();
         return UserVO.from(account);
     }
 
+    /**
+     * 修改当前登录用户的密码：支持「旧密码」与「邮箱验证码」两种通道且必须二选一。
+     *
+     * <p>都传或都不传一律拒绝：无法判断用户意图，且双通道会让「任一段校验漏实现」的
+     * 代码仍被另一段兜住。改密成功后强制注销全部会话（止损：旧凭据可能已泄露），
+     * 客户端须重新登录；会话清理在密码落库成功之后执行，失败仅 ERROR 告警不阻断。
+     *
+     * @param request 改密请求（旧密码 或 验证码 二选一 + 新密码；验证码通道要求
+     *                发送场景为 {@code CHANGE_PASSWORD} 且码发往本人邮箱）
+     * @throws BusinessException 通道未提供或同时提供
+     *         （{@link ResultCode#CHANGE_PASSWORD_CHANNEL_REQUIRED}）、旧密码错误
+     *         （{@link ResultCode#OLD_PASSWORD_ERROR}）、验证码无效或超限、未登录时
+     *         由 {@link SecurityUtils} 抛出（{@link ResultCode#UNAUTHORIZED}）
+     */
     @Override
     public void changePassword(ChangePasswordRequest request) {
         AuthUserAccount account = SecurityUtils.getCurrentUser();

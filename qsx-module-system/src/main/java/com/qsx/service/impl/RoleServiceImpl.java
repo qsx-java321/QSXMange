@@ -32,7 +32,22 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 角色管理服务实现
+ * 角色管理服务实现。
+ *
+ * <p>业务职责：角色分页/详情、创建、更新（名称/描述/状态）、删除、权限分配与下拉列表。
+ *
+ * <p>使用场景：{@code RoleController} 管理端接口；用户侧的角色分配与超管身份判定
+ * 依赖本模块维护的角色数据。
+ *
+ * <p>核心依赖：{@link RoleMapper}/{@link RolePermissionMapper}/{@link UserRoleMapper}/
+ * {@link PermissionMapper}（持久层）、{@link ApplicationEventPublisher}（提交后失效
+ * 受影响用户的权限缓存）。
+ *
+ * <p>事务与一致性：update/delete/assignPermissions 声明事务；受影响用户必须在改动关联表
+ * 之前反查（缓存失效监听器在提交后才执行，届时关联行已删、再查必然为空）。
+ *
+ * <p>保护闸：角色编码创建后不可修改；内置超管角色不可删除、不可停用、其权限绑定不可
+ * 整体替换——三道闸都是防「系统失去管理能力」而非防误操作。
  */
 @Service
 public class RoleServiceImpl implements RoleService {
@@ -73,6 +88,14 @@ public class RoleServiceImpl implements RoleService {
         this.eventPublisher = eventPublisher;
     }
 
+    /**
+     * 分页查询角色列表。
+     *
+     * <p>过滤条件均可空：编码/名称模糊匹配，状态精确匹配；结果按 id 倒序。
+     *
+     * @param query 分页查询条件（页码、页大小、可选的编码/名称/状态）
+     * @return 分页结果，每行为角色视图对象（不含权限关联明细）
+     */
     @Override
     public PageResult<RoleVO> page(RoleQuery query) {
         LambdaQueryWrapper<Role> wrapper = new LambdaQueryWrapper<Role>()
@@ -86,6 +109,13 @@ public class RoleServiceImpl implements RoleService {
         return PageResult.of(page.convert(RoleVO::from));
     }
 
+    /**
+     * 按主键查询角色详情（含已绑定的权限 ID 列表）。
+     *
+     * @param id 角色 ID
+     * @return 角色视图对象（permissionIds 为当前绑定集合）
+     * @throws BusinessException 角色不存在（{@link ResultCode#ROLE_NOT_FOUND}）
+     */
     @Override
     public RoleVO getById(Long id) {
         Role role = getRole(id);
@@ -94,6 +124,18 @@ public class RoleServiceImpl implements RoleService {
         return vo;
     }
 
+    /**
+     * 创建角色。
+     *
+     * <p>编码唯一性校验刻意包含逻辑删除行（物理唯一索引不含 deleted 列，删除后同编码
+     * 重建会撞索引）；状态缺省为正常；「查重 → 插入」之间的并发窗口由 uk_role_code
+     * 兜住并映射为同一业务码。
+     *
+     * @param request 创建请求（编码 + 名称，描述/状态可空）
+     * @return 新建角色的视图对象
+     * @throws BusinessException 角色编码已存在（{@link ResultCode#ROLE_CODE_EXISTS}，
+     *         含已被逻辑删除的历史编码）
+     */
     @Override
     public RoleVO create(RoleCreateRequest request) {
         // 角色编码唯一性校验：刻意包含逻辑删除行——uk_role_code 是物理唯一索引，
@@ -118,6 +160,21 @@ public class RoleServiceImpl implements RoleService {
         return RoleVO.from(role);
     }
 
+    /**
+     * 更新角色（名称/描述/状态）。
+     *
+     * <p>编码必须与原值一致——编码是 RBAC 权威标识，且内置超管保护按编码匹配，
+     * 改名会让保护静默失配。内置超管角色不可停用（停用会让仅经 ADMIN 取权的账号
+     * 立即失去全部权限，且可能无人能再启用它）。更新前反查该角色下用户，事务提交后
+     * 失效其权限缓存（状态/名称变更会影响菜单树等派生结果）。
+     *
+     * @param id      角色 ID
+     * @param request 更新请求（编码须与原值一致；名称/描述/状态）
+     * @return 更新后的角色视图对象
+     * @throws BusinessException 角色不存在（{@link ResultCode#ROLE_NOT_FOUND}）、
+     *         尝试修改编码（{@link ResultCode#ROLE_CODE_IMMUTABLE}）、
+     *         停用内置超管角色（{@link ResultCode#ADMIN_ROLE_CANNOT_DISABLE}）
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public RoleVO update(Long id, RoleUpdateRequest request) {
@@ -152,6 +209,17 @@ public class RoleServiceImpl implements RoleService {
         return RoleVO.from(role);
     }
 
+    /**
+     * 删除角色：级联解除权限关联与用户关联后逻辑删除。
+     *
+     * <p>内置超管角色禁止删除（避免误删导致失控）。普通角色会先物理删除
+     * 角色-权限、用户-角色关联，再逻辑删除角色本体；受影响用户必须在删关联之前反查，
+     * 事务提交后失效其权限缓存。
+     *
+     * @param id 角色 ID
+     * @throws BusinessException 角色不存在（{@link ResultCode#ROLE_NOT_FOUND}）、
+     *         内置超管角色不可删除（{@link ResultCode#ROLE_IN_USE}）
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
@@ -175,6 +243,19 @@ public class RoleServiceImpl implements RoleService {
         eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUsers(affectedUserIds));
     }
 
+    /**
+     * 为角色分配权限（整表替换：先物理删旧关联，再批量插新关联）。
+     *
+     * <p>内置超管角色的权限绑定不可整体替换（清空后连恢复所需的 role:assign 一起消失，
+     * 只能改库），幂等重存同样拒绝——判定只看目标角色身份，不看请求内容。其余情况先
+     * 校验目标权限均存在，再在改动关联前反查该角色下用户，事务提交后失效其权限缓存。
+     *
+     * @param roleId        角色 ID
+     * @param permissionIds 权限 ID 列表；{@code null} 或空列表表示清空该角色全部权限
+     * @throws BusinessException 角色不存在（{@link ResultCode#ROLE_NOT_FOUND}）、
+     *         目标为内置超管角色（{@link ResultCode#ADMIN_ROLE_PERMISSION_IMMUTABLE}）、
+     *         权限不存在（{@link ResultCode#PERMISSION_NOT_FOUND}）
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void assignPermissions(Long roleId, List<Long> permissionIds) {
@@ -223,6 +304,13 @@ public class RoleServiceImpl implements RoleService {
         eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUsers(affectedUserIds));
     }
 
+    /**
+     * 查询全部启用角色（下拉选项用），按 id 升序。
+     *
+     * <p>刻意只返回 status = 0 的角色，与权限查询的过滤谓词保持一致。
+     *
+     * @return 启用角色的视图对象列表；无数据时为空列表
+     */
     @Override
     public List<RoleVO> listAll() {
         List<Role> roles = roleMapper.selectList(

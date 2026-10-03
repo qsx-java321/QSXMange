@@ -35,7 +35,24 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 权限管理服务实现（菜单 + 按钮权限）
+ * 权限管理服务实现（菜单与按钮权限共用 sys_permission，以 type 区分）。
+ *
+ * <p>业务职责：权限分页/详情/全量列表/树、菜单与按钮权限的创建、更新、删除，
+ * 以及当前登录用户可见菜单树的组装。
+ *
+ * <p>使用场景：权限管理端接口与当前用户菜单树接口；菜单树接口依赖登录态
+ * （经 {@link SecurityUtils} 从安全上下文取当前用户）。
+ *
+ * <p>核心依赖：{@link PermissionMapper}/{@link RolePermissionMapper}/{@link UserRoleMapper}
+ * （持久层）、{@link PermissionCacheService}（读取当前用户权限码）、
+ * {@link ApplicationEventPublisher}（提交后失效受影响用户的权限缓存）。
+ *
+ * <p>事务与一致性：update/delete 声明事务；受影响用户必须在清理角色-权限关联之前反查，
+ * 否则提交后缓存失效监听器无从查起。创建/更新均校验父节点（须为已存在的菜单，且
+ * 不得挂到自身或子孙下）。
+ *
+ * <p>保护闸：内置菜单/权限行不可删除；标识（code）创建后不可修改——它是鉴权与菜单
+ * 过滤的唯一依据，改错会立刻锁死对应接口（包括改回所需的那个接口）。
  */
 @Service
 public class PermissionServiceImpl implements PermissionService {
@@ -61,6 +78,15 @@ public class PermissionServiceImpl implements PermissionService {
         this.eventPublisher = eventPublisher;
     }
 
+    /**
+     * 分页查询权限列表。
+     *
+     * <p>过滤条件均可空：标识/名称模糊匹配；按 sort + id 升序（id 作 tiebreaker，
+     * 保证同 sort 值下跨页顺序稳定）。
+     *
+     * @param query 分页查询条件（页码、页大小、可选的标识/名称）
+     * @return 分页结果，每行为权限视图对象
+     */
     @Override
     public PageResult<PermissionVO> page(PermissionQuery query) {
         LambdaQueryWrapper<Permission> wrapper = new LambdaQueryWrapper<Permission>()
@@ -76,6 +102,13 @@ public class PermissionServiceImpl implements PermissionService {
         return PageResult.of(page.convert(PermissionVO::from));
     }
 
+    /**
+     * 按主键查询权限详情。
+     *
+     * @param id 权限 ID
+     * @return 权限视图对象
+     * @throws BusinessException 权限不存在（{@link ResultCode#PERMISSION_NOT_FOUND}）
+     */
     @Override
     public PermissionVO getById(Long id) {
         Permission permission = permissionMapper.selectById(id);
@@ -85,6 +118,11 @@ public class PermissionServiceImpl implements PermissionService {
         return PermissionVO.from(permission);
     }
 
+    /**
+     * 查询全部权限（树组装与下拉用），按 sort 升序。
+     *
+     * @return 权限视图对象列表；无数据时为空列表
+     */
     @Override
     public List<PermissionVO> listAll() {
         return permissionMapper.selectList(
@@ -92,11 +130,29 @@ public class PermissionServiceImpl implements PermissionService {
                 .stream().map(PermissionVO::from).collect(Collectors.toList());
     }
 
+    /**
+     * 查询全量权限树（管理端树形展示，不做权限过滤）。
+     *
+     * @return 以顶级节点为根组装的多层树；无数据时为空列表
+     */
     @Override
     public List<PermissionVO> tree() {
         return buildTree(selectAll());
     }
 
+    /**
+     * 创建菜单或按钮权限（共用 sys_permission）。
+     *
+     * <p>标识唯一性校验刻意包含逻辑删除行；父节点缺省为顶级（0）且必须为已存在的菜单；
+     * type 缺省为菜单，visible/sort 均有缺省值。「查重 → 插入」之间的并发窗口由
+     * uk_perm_code 兜住并映射为同一业务码。
+     *
+     * @param request 创建请求（标识 + 名称；父节点/类型/路径/组件/图标/可见性/排序可空）
+     * @return 新建权限的视图对象
+     * @throws BusinessException 标识已存在（{@link ResultCode#PERMISSION_CODE_EXISTS}，
+     *         含已逻辑删除的历史标识）、父节点无效（{@link ResultCode#MENU_PARENT_INVALID}，
+     *         父节点不存在或不是菜单）
+     */
     @Override
     public PermissionVO create(MenuCreateRequest request) {
         // 标识唯一性校验（菜单/按钮共用 code 唯一索引）：刻意包含逻辑删除行——
@@ -130,6 +186,20 @@ public class PermissionServiceImpl implements PermissionService {
         return PermissionVO.from(permission);
     }
 
+    /**
+     * 更新菜单或按钮权限。
+     *
+     * <p>标识必须与原值一致（鉴权与菜单过滤依据，改错即失效）；父节点校验含防环
+     * （不得挂到自身或子孙下）。更新前反查持有该权限的用户，事务提交后失效其缓存。
+     *
+     * @param id      权限 ID
+     * @param request 更新请求（标识须与原值一致；名称/类型/父节点/路径/组件/图标/
+     *                可见性/排序）
+     * @return 更新后的权限视图对象
+     * @throws BusinessException 菜单/权限不存在（{@link ResultCode#MENU_NOT_FOUND}）、
+     *         尝试修改标识（{@link ResultCode#PERMISSION_CODE_IMMUTABLE}）、
+     *         父节点无效（{@link ResultCode#MENU_PARENT_INVALID}）
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public PermissionVO update(Long id, MenuUpdateRequest request) {
@@ -162,6 +232,19 @@ public class PermissionServiceImpl implements PermissionService {
         return PermissionVO.from(permission);
     }
 
+    /**
+     * 删除菜单或按钮权限：主闸（内置不可删）→ 子节点检查 → 清角色关联 → 逻辑删除。
+     *
+     * <p>内置行删除会让对应接口对所有人永久 403，且同一标识无法经接口重建，
+     * 故在主闸处直接拒绝并刻意排在子节点检查之前（更接近操作者需要知道的原因）；
+     * 存在子节点同样拒绝以防孤立子树。删除前反查持有该权限的用户，事务提交后
+     * 失效其缓存。
+     *
+     * @param id 权限 ID
+     * @throws BusinessException 菜单/权限不存在（{@link ResultCode#MENU_NOT_FOUND}）、
+     *         系统内置不可删除（{@link ResultCode#SYSTEM_PERMISSION_CANNOT_DELETE}）、
+     *         存在子菜单（{@link ResultCode#MENU_HAS_CHILDREN}）
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
@@ -193,6 +276,16 @@ public class PermissionServiceImpl implements PermissionService {
         eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUsers(affectedUserIds));
     }
 
+    /**
+     * 查询当前登录用户可见的菜单树。
+     *
+     * <p>权限码从缓存读取（认证链路已回填）；只保留「用户有权限的菜单 + 其全部祖先链」
+     * （无直接权限也能看到父菜单入口），随后按父节点组装成树。
+     *
+     * @return 当前用户可见的菜单树；无权限或无菜单数据时为空列表
+     * @throws BusinessException 未登录时由 {@link SecurityUtils#getCurrentUser()} 抛出
+     *         （{@link ResultCode#UNAUTHORIZED}）
+     */
     @Override
     public List<PermissionVO> getUserMenuTree() {
         AuthUserAccount current = SecurityUtils.getCurrentUser();

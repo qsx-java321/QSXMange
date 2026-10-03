@@ -17,11 +17,20 @@ import java.util.regex.Pattern;
 /**
  * 双 token 有状态会话实现。
  *
- * 全部多键操作走 Lua 原子脚本（签发 / 轮换 / 清理），消除并发竞态：
+ * <p>业务职责：access/refresh token 的签发、轮换与注销，以及按令牌反查 userId——
+ * Redis 是令牌有效性的唯一真相源（令牌本身无签名、无载荷）。
+ *
+ * <p>使用场景：登录/刷新/登出/踢人/禁用/删除用户/改密等生命周期操作经
+ * {@link AuthSessionService} 被业务模块调用；认证过滤器用它反查身份。
+ *
+ * <p>核心依赖：{@link StringRedisTemplate} 与三条 Lua 脚本（签发/轮换/清理）、
+ * {@link TokenProvider}（凭证生成）、{@link AuthSessionProperties}（TTL 与绝对上限）。
+ *
+ * <p>全部多键操作走 Lua 原子脚本（签发 / 轮换 / 清理），消除并发竞态：
  * 改造前 refresh 是「GET -> 改 -> SET」的非原子读改写，一次与踢人（裸 DEL）
  * 并发的刷新会把刚被踢掉的会话重新 SET 回来并续上新的 7 天 TTL。
  *
- * 脚本参数约定（三条脚本通用）：
+ * <p>脚本参数约定（三条脚本通用）：
  * <ul>
  *   <li>所有 ARGV 均为字符串：StringRedisTemplate 用 StringRedisSerializer 序列化参数，
  *       传 Long/Integer 会在触达 Redis 之前抛 ClassCastException；</li>
@@ -29,7 +38,7 @@ import java.util.regex.Pattern;
  *   <li>时间戳由 Java 传入（不用 redis.call('TIME')，避免脚本确定性争议）。</li>
  * </ul>
  *
- * 失败策略：**fail-closed**，Redis 异常一律向上抛出，绝不降级放行。
+ * <p>失败策略：**fail-closed**，Redis 异常一律向上抛出，绝不降级放行。
  */
 @Service
 public class AuthSessionServiceImpl implements AuthSessionService {
@@ -62,6 +71,16 @@ public class AuthSessionServiceImpl implements AuthSessionService {
         this.properties = properties;
     }
 
+    /**
+     * 为用户签发一对新令牌并建立/覆盖会话（单端登录：旧会话的 at/rt 立即失效）。
+     *
+     * <p>Lua 内写入顺序固定为「先清旧 → 写 session → 写令牌键」：脚本报错不回滚，
+     * 该顺序保证崩溃时留下的是死令牌而非无法吊销的裸令牌。Redis 异常 fail-closed。
+     *
+     * @param userId 用户 ID
+     * @return 新会话（userId + access/refresh token）
+     * @throws IllegalStateException Redis 异常（fail-closed，绝不降级放行）
+     */
     @Override
     public AuthSession issue(Long userId) {
         String accessToken = tokenProvider.generateAccessToken();
@@ -87,6 +106,18 @@ public class AuthSessionServiceImpl implements AuthSessionService {
         return new AuthSession(userId, accessToken, refreshToken);
     }
 
+    /**
+     * 用 refresh token 原子换发一对新令牌（旧 rt 删除、新 at/rt 写入）。
+     *
+     * <p>格式不合法的令牌直接拒绝、不触达 Redis；Lua 内重验 rt、双保险比对 session、
+     * 判定绝对上限（超限时强制作废会话）。INVALID、EXPIRED 与任何非预期返回值统一
+     * 返回刷新令牌无效，不向客户端泄露失败细节。
+     *
+     * @param refreshToken 待轮换的 refresh token（32 字节 hex 格式）
+     * @return 轮换后的新会话（userId 由脚本回传）
+     * @throws BusinessException 令牌缺失/无效/已过期/超过绝对上限，或 Redis 异常，
+     *         统一 {@link ResultCode#REFRESH_TOKEN_INVALID}（fail-closed）
+     */
     @Override
     public AuthSession rotate(String refreshToken) {
         if (!isWellFormed(refreshToken)) {
@@ -140,6 +171,15 @@ public class AuthSessionServiceImpl implements AuthSessionService {
         throw new BusinessException(ResultCode.REFRESH_TOKEN_INVALID);
     }
 
+    /**
+     * 注销指定用户的全部会话：at/rt/session 三键一并清理，凭证立即失效。
+     *
+     * <p>面向用户生命周期的统一吊销入口（登出/踢人/禁用/删除/改密/重置密码）；
+     * Redis 异常 fail-closed（向上抛出，由调用方决定是否降级告警）。
+     *
+     * @param userId 用户 ID
+     * @throws IllegalStateException Redis 异常（fail-closed）
+     */
     @Override
     public void remove(Long userId) {
         try {
@@ -153,6 +193,17 @@ public class AuthSessionServiceImpl implements AuthSessionService {
         }
     }
 
+    /**
+     * 按 access token 反查 userId（认证过滤器每请求调用）。
+     *
+     * <p>格式不合法的令牌直接返回 {@code null}、不触达 Redis；不捕获 Redis 异常——
+     * 调用方需要区分「令牌不存在」（放行匿名或 401）与「Redis 不可达」（fail-closed
+     * 拒绝认证），两者语义不同。
+     *
+     * @param accessToken 待反查的 access token
+     * @return 对应 userId；令牌不存在或格式非法时为 {@code null}
+     * @throws RuntimeException Redis 不可达时由底层抛出（刻意不在此捕获）
+     */
     @Override
     public Long findUserIdByAccessToken(String accessToken) {
         if (!isWellFormed(accessToken)) {
@@ -162,6 +213,16 @@ public class AuthSessionServiceImpl implements AuthSessionService {
         return parseUserId(stringRedisTemplate.opsForValue().get(AuthRedisKeys.at(accessToken)));
     }
 
+    /**
+     * 按 refresh token 只读反查 userId（不消耗令牌），供刷新流程的第一步使用。
+     *
+     * <p>格式不合法的令牌直接返回 {@code null}、不触达 Redis；不捕获 Redis 异常，
+     * 由调用方按与轮换一致的契约处理（统一映射为刷新令牌无效）。
+     *
+     * @param refreshToken 待反查的 refresh token
+     * @return 对应 userId；令牌不存在或格式非法时为 {@code null}
+     * @throws RuntimeException Redis 不可达时由底层抛出（刻意不在此捕获）
+     */
     @Override
     public Long findUserIdByRefreshToken(String refreshToken) {
         if (!isWellFormed(refreshToken)) {

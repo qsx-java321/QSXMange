@@ -13,9 +13,18 @@ import java.util.Collection;
 import java.util.stream.Collectors;
 
 /**
- * RBAC 权限缓存服务实现
+ * RBAC 权限缓存服务实现。
  *
- * 设计要点：
+ * <p>业务职责：缓存用户的角色码/权限码（读取与精确失效），减少每请求回源 MySQL 的查询量。
+ *
+ * <p>使用场景：认证链路（{@code SecurityUserDetailsService}）、菜单树与登录响应读取权限
+ * 数据；角色/权限/菜单变更在事务提交后经事件监听器调用 {@code evictUsers} 精确失效。
+ *
+ * <p>核心依赖：{@link UserAuthorityRepository}（回源查询）、{@link StringRedisTemplate}
+ * （缓存存储）、{@link ObjectMapper}（JSON 序列化）、{@link RbacCacheProperties}
+ * （开关与 TTL）。
+ *
+ * <p>设计要点：
  * - key = qsx:auth:perm:{userId}（用 userId 而非 email：读取/失效点均持有 userId，改邮箱/禁用无需处理 key）
  * - value = PermissionCacheData 的 JSON（仅缓存权限码，用户行/密码/状态仍实时查库）
  * - 空权限也回填缓存，防止未绑定角色用户每请求回源（防穿透）
@@ -52,6 +61,15 @@ public class PermissionCacheServiceImpl implements PermissionCacheService {
         this.properties = properties;
     }
 
+    /**
+     * 读取指定用户的角色码/权限码（未命中回源 MySQL 并回填，含空集合）。
+     *
+     * <p>开关关闭时直接查库；缓存值无法解析时回源并回填覆盖坏值（同一次请求内自愈）；
+     * Redis 异常降级为实时查库，不中断业务。
+     *
+     * @param userId 用户 ID
+     * @return 角色码/权限码数据；空集合表示该用户确无角色或权限（同样会被缓存）
+     */
     @Override
     public PermissionCacheData load(Long userId) {
         if (!properties.isEnabled()) {
@@ -97,6 +115,14 @@ public class PermissionCacheServiceImpl implements PermissionCacheService {
         }
     }
 
+    /**
+     * 精确失效指定用户的权限缓存（由 AFTER_COMMIT 的事务事件监听器调用）。
+     *
+     * <p>开关关闭、userIds 为 null 或空时不做事；删除失败必须 ERROR 告警——
+     * 此时受影响用户会继续持有已回收的权限直至 TTL 到期，且没有重试机会。
+     *
+     * @param userIds 受影响用户 ID 集合；允许为 null/空（表示无受影响用户，直接返回）
+     */
     @Override
     public void evictUsers(Collection<Long> userIds) {
         if (!properties.isEnabled() || userIds == null || userIds.isEmpty()) {

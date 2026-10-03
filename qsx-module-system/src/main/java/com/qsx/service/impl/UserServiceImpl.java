@@ -36,7 +36,22 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * 用户管理服务实现
+ * 用户管理服务实现。
+ *
+ * <p>业务职责：用户分页/详情查询、后台建号、资料与状态更新（含禁用）、删除、
+ * 角色分配与强制登出；并作为认证链路的用户读写实现（getByEmail / save / updatePassword）。
+ *
+ * <p>使用场景：{@code UserController} 的管理端接口；{@link AuthServiceImpl} 的注册、
+ * 改密与密码重置写库也复用本类。
+ *
+ * <p>核心依赖：{@link UserMapper}/{@link UserRoleMapper}/{@link RoleMapper}（持久层）、
+ * {@link AuthSessionService}（会话清理：禁用/删除/踢人）、{@link ApplicationEventPublisher}
+ * （事务提交后失效权限缓存）。
+ *
+ * <p>事务与副作用时机：delete/assignRoles/kick 声明事务（rollbackFor=Exception）；删除的
+ * 会话清理推迟到事务提交之后（无事务则立即执行），避免回滚后留下「用户还在、会话已清」的
+ * 不一致。涉及生命周期保护的写操作按「存在性 → 禁止操作自己 → 内置超管保护」顺序校验，
+ * 超管身份判定刻意走不过滤角色状态的 {@code existsRoleCode}（理由见私有辅助注释）。
  */
 @Slf4j
 @Service
@@ -127,6 +142,14 @@ public class UserServiceImpl implements UserService {
         this.authSessionService = authSessionService;
     }
 
+    /**
+     * 分页查询用户列表。
+     *
+     * <p>过滤条件均可空：邮箱/昵称模糊匹配，状态精确匹配；结果按 id 倒序（新用户在前）。
+     *
+     * @param query 分页查询条件（页码、页大小、可选的邮箱/昵称/状态）
+     * @return 分页结果，每行为用户视图对象（不含角色关联明细）
+     */
     @Override
     public PageResult<UserVO> page(UserQuery query) {
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<User>()
@@ -141,6 +164,13 @@ public class UserServiceImpl implements UserService {
         return PageResult.of(page.convert(UserVO::from));
     }
 
+    /**
+     * 按主键查询用户详情。
+     *
+     * @param id 用户 ID
+     * @return 用户视图对象
+     * @throws BusinessException 用户不存在（{@link ResultCode#USER_NOT_FOUND}）
+     */
     @Override
     public UserVO getById(Long id) {
         User user = userMapper.selectById(id);
@@ -150,6 +180,17 @@ public class UserServiceImpl implements UserService {
         return UserVO.from(user);
     }
 
+    /**
+     * 后台建号：管理员代为创建用户。
+     *
+     * <p>口令由管理员设定（对方已知），因此落库时置「强制首次改密」标志；昵称缺省时
+     * 按邮箱生成；状态缺省为正常。并发「查重 → 插入」窗口由 uk_email 兜住并映射为
+     * 与查重一致的业务码。
+     *
+     * @param request 建号请求（邮箱 + 初始密码，昵称/状态可空）
+     * @return 新建用户的视图对象
+     * @throws BusinessException 邮箱已注册（{@link ResultCode#EMAIL_ALREADY_REGISTERED}）
+     */
     @Override
     public UserVO create(UserCreateRequest request) {
         // 邮箱唯一性校验
@@ -175,6 +216,22 @@ public class UserServiceImpl implements UserService {
         return UserVO.from(user);
     }
 
+    /**
+     * 更新用户资料与状态。
+     *
+     * <p>邮箱变更时校验唯一性（排除自己）。请求禁用时先做两道保护（禁止禁用自己、
+     * 内置超管不可禁用），再落库并立即清理目标会话（旧 access token 失效）；会话清理
+     * 失败仅告警不阻断——禁用语义优先，每请求查库的 isEnabled() 是第二道防线。
+     * 判定统一为「状态非 0 即禁用」，与 SecurityUser.isEnabled() 同一谓词。
+     *
+     * @param id      目标用户 ID
+     * @param request 更新请求（邮箱、昵称、状态；DTO 已限制状态取值 0/1）
+     * @return 更新后的用户视图对象
+     * @throws BusinessException 用户不存在（{@link ResultCode#USER_NOT_FOUND}）、
+     *         邮箱已注册（{@link ResultCode#EMAIL_ALREADY_REGISTERED}）、
+     *         禁用自己（{@link ResultCode#CANNOT_OPERATE_SELF}）、
+     *         禁用内置超管（{@link ResultCode#ADMIN_USER_CANNOT_DISABLE}）
+     */
     @Override
     public UserVO update(Long id, UserUpdateRequest request) {
         User user = userMapper.selectById(id);
@@ -217,6 +274,18 @@ public class UserServiceImpl implements UserService {
         return UserVO.from(user);
     }
 
+    /**
+     * 删除用户（逻辑删除），并释放邮箱占用。
+     *
+     * <p>保护闸：禁止删除自己、内置超管不可删除。删除前把原邮箱改写为
+     * {@code 原邮箱#deleted_<时间戳>} 释放唯一索引，使同一邮箱可再次注册；随后逻辑删除，
+     * 并在事务提交后清理目标会话（Redis 异常仅告警）与失效该用户权限缓存。
+     *
+     * @param id 目标用户 ID
+     * @throws BusinessException 用户不存在（{@link ResultCode#USER_NOT_FOUND}）、
+     *         删除自己（{@link ResultCode#CANNOT_OPERATE_SELF}）、
+     *         删除内置超管（{@link ResultCode#ADMIN_USER_CANNOT_DELETE}）
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
@@ -252,6 +321,23 @@ public class UserServiceImpl implements UserService {
         eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUser(id));
     }
 
+    /**
+     * 以整表替换语义为指定用户分配角色（先物理删旧关联，再批量插新关联）。
+     *
+     * <p>保护闸按固定顺序：用户存在性 → 禁止给自己改角色（无操作者上下文时跳过）
+     * → 目标为内置超管时角色不可修改 → 授予 ADMIN 角色需操作者本身为超管
+     * （无操作者上下文按「不是超管」fail-closed 处理）→ 目标角色均存在。通过后整表替换，
+     * 事务提交后失效该用户权限缓存。
+     *
+     * @param userId  目标用户 ID
+     * @param roleIds 角色 ID 列表；{@code null} 或空列表表示清空该用户全部角色
+     *                （不含授予语义）
+     * @throws BusinessException 用户不存在（{@link ResultCode#USER_NOT_FOUND}）、
+     *         修改自己的角色（{@link ResultCode#CANNOT_OPERATE_SELF}）、
+     *         目标为内置超管（{@link ResultCode#ADMIN_USER_ROLE_IMMUTABLE}）、
+     *         授予内置超管角色但操作者非超管（{@link ResultCode#ADMIN_GRANT_REQUIRES_ADMIN}）、
+     *         角色不存在（{@link ResultCode#ROLE_NOT_FOUND}）
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void assignRoles(Long userId, List<Long> roleIds) {
@@ -330,6 +416,18 @@ public class UserServiceImpl implements UserService {
         eventPublisher.publishEvent(PermissionCacheEvictEvent.ofUser(userId));
     }
 
+    /**
+     * 强制登出指定用户（踢人）。
+     *
+     * <p>保护闸：禁止踢自己、内置超管不可被强制登出，随后清理目标会话三键。
+     * 与登出/禁用不同，这里的会话清理不吞异常（fail-closed）：Redis 故障由全局兜底
+     * 返回 500，而不是假装踢成功。
+     *
+     * @param id 目标用户 ID
+     * @throws BusinessException 用户不存在（{@link ResultCode#USER_NOT_FOUND}）、
+     *         踢自己（{@link ResultCode#CANNOT_OPERATE_SELF}）、
+     *         踢内置超管（{@link ResultCode#ADMIN_USER_CANNOT_KICK}）
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void kick(Long id) {
@@ -349,17 +447,40 @@ public class UserServiceImpl implements UserService {
         authSessionService.remove(id);
     }
 
+    /**
+     * 按邮箱查询用户（认证/注册链路的复用入口），不存在时返回 {@code null}。
+     *
+     * @param email 邮箱（精确匹配，查询语义由库 collation 决定）
+     * @return 匹配的用户实体；不存在时为 {@code null}
+     */
     @Override
     public User getByEmail(String email) {
         return userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getEmail, email));
     }
 
+    /**
+     * 直接落库一个用户（注册链路复用入口）。
+     *
+     * <p>此处不做唯一性预检：由 uk_email 唯一索引兜底，调用方
+     * （{@link AuthServiceImpl#register}）负责捕获冲突并映射业务码。
+     *
+     * @param user 已填充邮箱/口令/昵称/状态的用户实体
+     */
     @Override
     public void save(User user) {
         userMapper.insert(user);
     }
 
+    /**
+     * 更新口令并清除「强制首次改密」标志——改密与忘记密码重置的唯一写库入口。
+     *
+     * <p>标志与口令在同一条 UPDATE 中落库、无中间态；必须显式写入 {@code Boolean.FALSE}
+     * （NOT_NULL 字段策略下 null 不会进 SET 子句，标志将永远清不掉）。
+     *
+     * @param id              目标用户 ID
+     * @param encodedPassword 已加密的口令（加密由调用方负责）
+     */
     @Override
     public void updatePassword(Long id, String encodedPassword) {
         User user = new User();

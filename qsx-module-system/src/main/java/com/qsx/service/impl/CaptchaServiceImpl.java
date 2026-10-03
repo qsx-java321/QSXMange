@@ -71,6 +71,22 @@ public class CaptchaServiceImpl implements CaptchaService {
         this.properties = properties;
     }
 
+    /**
+     * 生成并向目标邮箱发送验证码。
+     *
+     * <p>顺序固定为「Lua 原子落码（限流标记 + 当日计数 + 落码 + 清零错次）→ 异步投递」：
+     * 投递失败不让接口报错——码已在 Redis 中，用户可重发；邮件线程池拒绝任务时由本方法
+     * 兜住并 ERROR 留痕。Redis 异常 fail-closed（转 {@link IllegalStateException} 由全局
+     * 兜底为 500），绝不降级放行。
+     *
+     * @param scene    验证码场景（决定键空间与前置语义），不可为 null
+     * @param email    目标邮箱；调用方保证非空，方法内统一归一化（trim + 小写）后拼键
+     * @param clientIp 客户端 IP，用于跨场景/跨邮箱的 IP 日限；可空，缺失归一为 {@code unknown}
+     * @return 仅调试模式返回验证码明文（供响应直返）；正常路径返回 {@code null}
+     * @throws BusinessException 触发发送间隔/邮箱日限/IP 日限时抛出
+     *         （{@link ResultCode#CAPTCHA_SEND_TOO_FREQUENT}，不区分具体原因）
+     * @throws IllegalStateException Redis 异常或 Lua 返回非预期结果（fail-closed）
+     */
     @Override
     public String send(CaptchaScene scene, String email, String clientIp) {
         String target = CaptchaRedisKeys.normalizeEmail(email);
@@ -126,6 +142,20 @@ public class CaptchaServiceImpl implements CaptchaService {
         return properties.isDebug() ? code : null;
     }
 
+    /**
+     * 校验验证码：GET → 比对 → 计数 → 删除在 Lua 内原子完成，校验成功即用后即焚。
+     *
+     * <p>失败语义统一：不存在 / 已过期 / 填错一律同码同文案（不泄露状态、不回显剩余次数）；
+     * 错误次数达到上限后该码作废并返回超限。Redis 异常 fail-closed
+     * （转 {@link IllegalStateException} 由全局兜底为 500）。
+     *
+     * @param scene 验证码场景，不可为 null
+     * @param email 目标邮箱；调用方保证非空，方法内统一归一化后拼键
+     * @param code  用户提交的验证码；可空（空值直接判无效，不触达 Redis）
+     * @throws BusinessException 验证码无效/已过期/不匹配（{@link ResultCode#CAPTCHA_INVALID}）
+     *         或错误次数超限（{@link ResultCode#CAPTCHA_ATTEMPT_EXCEEDED}）
+     * @throws IllegalStateException Redis 异常或 Lua 返回非预期结果（fail-closed）
+     */
     @Override
     public void verify(CaptchaScene scene, String email, String code) {
         // 空值直接判无效：不落到 Redis（Lua 参数不接受 null），也不抛 500

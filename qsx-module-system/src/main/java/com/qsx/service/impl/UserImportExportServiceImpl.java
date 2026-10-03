@@ -89,6 +89,12 @@ public class UserImportExportServiceImpl implements UserImportExportService {
         this.passwordEncoder = passwordEncoder;
     }
 
+    /**
+     * 下载用户导入模板：向响应流写出仅含表头的空 Excel（文件不落盘）。
+     *
+     * @param response HTTP 响应；由本方法设置内容类型、编码与附件文件名
+     * @throws IOException 响应流写出失败
+     */
     @Override
     public void downloadTemplate(HttpServletResponse response) throws IOException {
         response.setContentType(EXCEL_CONTENT_TYPE);
@@ -100,6 +106,22 @@ public class UserImportExportServiceImpl implements UserImportExportService {
                 .doWrite(Collections.emptyList());
     }
 
+    /**
+     * 批量导入用户：整批校验、整体拒绝，全部数据行合法才在单事务内落库。
+     *
+     * <p>流程：文件非空与扩展名白名单 → 流式解析（公式单元格显式拒绝）→ 数据行数与上限
+     * 校验 → 一次查库预取已占用邮箱与角色映射 → 逐行收集全部错误 → 任一行不合法则整体
+     * 拒绝（返回错误明细、零落库）→ 批量插用户并按邮箱回查组装角色关联。导入账号共用
+     * 配置的默认口令并强制首次改密；「校验快照 → 批量插入」之间的并发冲突映射为导入
+     * 校验失败（事务整体回滚，不留半批数据）。
+     *
+     * @param file 上传的 Excel 文件；本方法校验非空且扩展名为 .xlsx/.xls
+     * @return 导入结果：成功行数与错误明细（整体拒绝时成功数为 0）
+     * @throws BusinessException 文件为空/扩展名不支持（{@link ResultCode#BAD_REQUEST}）、
+     *         解析失败或存在错误行（{@link ResultCode#IMPORT_VALIDATE_FAILED}）、
+     *         行数为空或超过上限（{@link ResultCode#IMPORT_DATA_TOO_LARGE}）
+     * @throws IOException 读取上传流失败
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ImportResult importUsers(MultipartFile file) throws IOException {
@@ -252,6 +274,17 @@ public class UserImportExportServiceImpl implements UserImportExportService {
         return result;
     }
 
+    /**
+     * 按筛选条件全量导出用户为 Excel（直接写响应流，文件不落盘）。
+     *
+     * <p>筛选条件与用户分页查询一致但不分页；导出前先查上限，超限直接拒绝而不是静默截断。
+     * 角色编码批量组装（两次查询避免 N+1），附件文件名带时间戳。
+     *
+     * @param query    筛选条件（与用户分页查询同构；分页字段不参与）
+     * @param response HTTP 响应；由本方法设置内容类型、编码与附件文件名
+     * @throws BusinessException 导出数据量超过上限（{@link ResultCode#IMPORT_DATA_TOO_LARGE}）
+     * @throws IOException 响应流写出失败
+     */
     @Override
     public void exportUsers(UserQuery query, HttpServletResponse response) throws IOException {
         // 与用户分页查询一致的筛选条件，不分页全量导出

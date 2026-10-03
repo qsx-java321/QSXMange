@@ -35,8 +35,19 @@ public class SmtpEmailService implements EmailService {
     }
 
     /**
-     * {@code @Async} 生效前提：本 Bean 由**外部 Bean**（CaptchaServiceImpl）调用。
-     * Spring 的异步基于代理，同类内部自调用会让 @Async 静默失效（见 OperationLogServiceImpl 的教训）。
+     * 异步投递验证码邮件。
+     *
+     * <p>流程：组装简单文本邮件（标题用场景文案）→ 经 JavaMailSender 提交 SMTP →
+     * 记录日志。投递失败在异步线程内捕获并 ERROR 留痕，不影响接口结果（码已落 Redis，
+     * 用户可重发）；「提交成功」不等于「已送达」，本地可用 Mailpit Web UI 确认。
+     *
+     * <p>{@code @Async} 生效前提：本 Bean 由**外部 Bean**（CaptchaServiceImpl）调用。
+     * Spring 的异步基于代理，同类内部自调用会让 @Async 静默失效（见 OperationLogServiceImpl
+     * 的教训）。
+     *
+     * @param scene 验证码场景（决定邮件标题中的场景文案）
+     * @param email 收件人邮箱
+     * @param code  验证码明文（6 位数字）
      */
     @Override
     @Async("captchaMailExecutor")

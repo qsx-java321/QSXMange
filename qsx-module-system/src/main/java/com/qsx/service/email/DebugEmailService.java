@@ -27,6 +27,13 @@ public class DebugEmailService implements EmailService {
         log.warn("======================================================");
     }
 
+    /**
+     * 空实现：不投递任何邮件——验证码由 {@code CaptchaServiceImpl} 直接放进响应返回。
+     *
+     * @param scene 验证码场景（本实现不使用）
+     * @param email 收件人邮箱（本实现不使用）
+     * @param code  验证码明文（本实现不使用，由服务层回传响应）
+     */
     @Override
     public void sendVerificationCode(CaptchaScene scene, String email, String code) {
         // 刻意什么都不做：码由 CaptchaServiceImpl 交给调用方返回
